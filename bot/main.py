@@ -31,12 +31,20 @@ def main() -> None:
     configure_logging(settings.log_level)
     logger = logging.getLogger(__name__)
 
-    application = (
+    builder = (
         ApplicationBuilder()
         .token(settings.bot_token)
         .post_init(post_init)
-        .build()
     )
+
+    if settings.telegram_proxy:
+        # Used for both Bot API calls and getUpdates polling
+        builder = builder.proxy(settings.telegram_proxy).get_updates_proxy(
+            settings.telegram_proxy
+        )
+        logger.info("Using Telegram proxy: %s", settings.telegram_proxy)
+
+    application = builder.build()
     register_handlers(application)
 
     logger.info("Starting bot in polling mode...")

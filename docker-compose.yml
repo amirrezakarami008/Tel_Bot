@@ -15,12 +15,22 @@ services:
       retries: 10
 
   bot:
-    build: .
+    build:
+      context: .
+      # شبکه میزبان هنگام بیلد → pip مثل خود سیستم به اینترنت/پروکسی وصل می‌شود
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./gift_files:/app/gift_files
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy

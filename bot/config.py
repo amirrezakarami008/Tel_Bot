@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     postgres_password: str | None = Field(default=None, alias="POSTGRES_PASSWORD")
     postgres_db: str | None = Field(default=None, alias="POSTGRES_DB")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    # Optional: http://host:port or socks5://host:port (needed when Telegram is blocked)
+    telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
 
     @field_validator("bot_token", "webinar_link", "database_url", "admin_telegram_ids", "required_channels")
     @classmethod
@@ -41,6 +43,16 @@ class Settings(BaseSettings):
         if not cleaned:
             raise ValueError("must not be empty")
         return cleaned
+
+    @field_validator("telegram_proxy", mode="before")
+    @classmethod
+    def empty_proxy_as_none(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
 
     @field_validator("log_level")
     @classmethod
