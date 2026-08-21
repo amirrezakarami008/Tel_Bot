@@ -24,6 +24,14 @@ async def post_init(application: Application) -> None:
     logging.getLogger(__name__).info("Initializing database...")
     await init_db()
 
+    from telegram import BotCommand
+
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "شروع و منوی اصلی"),
+        ]
+    )
+
     from bot.handlers.webinar import announce_webinar_if_link_changed
 
     await announce_webinar_if_link_changed(application)
