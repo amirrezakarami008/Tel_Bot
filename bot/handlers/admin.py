@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select
 from telegram import Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from bot.config import get_settings
 from bot.database.models import GiftFileClaim, SupportDirection, SupportMessage, User, WebinarLinkClaim
@@ -18,6 +19,7 @@ from bot.handlers.webinar import broadcast_webinar_to_all_users, mark_webinar_li
 
 logger = logging.getLogger(__name__)
 
+BTN_STATS = "📊 گزارش ربات"
 TEHRAN = ZoneInfo("Asia/Tehran")
 
 
@@ -28,8 +30,8 @@ def _is_admin(update: Update) -> bool:
 
 def _pct(part: int, whole: int) -> str:
     if whole <= 0:
-        return "0%"
-    return f"{(part * 100 / whole):.0f}%"
+        return "0٪"
+    return f"{(part * 100 / whole):.0f}٪"
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -134,24 +136,28 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
     await message.reply_text(
-        "📊 آمار ربات\n\n"
+        "📊 گزارش ربات\n\n"
         "👥 کاربران\n"
-        f"کل: {users_count}\n"
-        f"امروز: {users_today}\n"
-        f"۷ روز اخیر: {users_7d}\n"
-        f"بدون اکشن (نه وبینار نه هدیه): {inactive_count}\n\n"
-        "🎯 تبدیل فیچرها\n"
-        f"وبینار: {webinar_count} ({_pct(webinar_count, users_count)})"
-        f" — امروز {webinar_today}\n"
-        f"هدیه: {gift_count} ({_pct(gift_count, users_count)})"
-        f" — امروز {gift_today}\n"
-        f"هر دو: {both_count}\n"
-        f"فقط وبینار: {only_webinar}\n"
-        f"فقط هدیه: {only_gift}\n\n"
+        f"• کل کسانی که ربات را استارت کرده‌اند: {users_count} نفر\n"
+        f"• تازه‌وارد امروز: {users_today} نفر\n"
+        f"• تازه‌وارد ۷ روز اخیر: {users_7d} نفر\n"
+        f"• هنوز نه لینک وبینار گرفته‌اند نه فایل هدیه: {inactive_count} نفر\n\n"
+        "🔗 لینک وبینار\n"
+        f"• تا حالا گرفته‌اند: {webinar_count} نفر از {users_count}"
+        f" ({_pct(webinar_count, users_count)})\n"
+        f"• امروز گرفته‌اند: {webinar_today} نفر\n\n"
+        "🎁 فایل هدیه\n"
+        f"• تا حالا گرفته‌اند: {gift_count} نفر از {users_count}"
+        f" ({_pct(gift_count, users_count)})\n"
+        f"• امروز گرفته‌اند: {gift_today} نفر\n\n"
+        "📌 خلاصه دریافت‌ها\n"
+        f"• هم وبینار هم هدیه: {both_count} نفر\n"
+        f"• فقط وبینار: {only_webinar} نفر\n"
+        f"• فقط هدیه: {only_gift} نفر\n\n"
         "💬 پشتیبانی\n"
-        f"مکالمات باز: {open_count}\n"
-        f"کاربران پیام‌دهنده: {support_users}\n"
-        f"پیام‌های امروز: {support_today}"
+        f"• منتظر پاسخ شما: {open_count} گفتگو\n"
+        f"• تا حالا پیام پشتیبانی فرستاده‌اند: {support_users} نفر\n"
+        f"• پیام‌های پشتیبانی امروز: {support_today}"
     )
 
 
@@ -210,5 +216,11 @@ async def send_webinar_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def register(application: Application) -> None:
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_STATS)}$"),
+            stats_command,
+        )
+    )
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("send_webinar", send_webinar_command))

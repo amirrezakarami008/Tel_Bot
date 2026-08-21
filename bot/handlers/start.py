@@ -55,7 +55,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await send_gift_gate(update, context)
         return
 
-    await update.message.reply_text(WELCOME_TEXT, reply_markup=main_menu_keyboard())
+    await update.message.reply_text(
+        WELCOME_TEXT,
+        reply_markup=main_menu_keyboard(update.effective_user.id),
+    )
 
 
 async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

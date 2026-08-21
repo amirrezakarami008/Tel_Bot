@@ -32,14 +32,17 @@ def membership_keyboard(check_callback: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
+def main_menu_keyboard(telegram_id: int | None = None) -> ReplyKeyboardMarkup:
     from bot.handlers.start import BTN_GIFT, BTN_SUPPORT, BTN_WEBINAR
 
-    return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton(BTN_WEBINAR)],
-            [KeyboardButton(BTN_GIFT)],
-            [KeyboardButton(BTN_SUPPORT)],
-        ],
-        resize_keyboard=True,
-    )
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(BTN_WEBINAR)],
+        [KeyboardButton(BTN_GIFT)],
+        [KeyboardButton(BTN_SUPPORT)],
+    ]
+    if telegram_id is not None and get_settings().is_admin(telegram_id):
+        from bot.handlers.admin import BTN_STATS
+
+        rows.append([KeyboardButton(BTN_STATS)])
+
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
