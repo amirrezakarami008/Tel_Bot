@@ -13,16 +13,14 @@ def membership_keyboard(check_callback: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     for channel in settings.channels:
-        username = channel.get("username")
         invite = channel.get("invite_link")
-        label = f"عضویت در @{username}" if username else "عضویت در کانال"
         if invite:
-            rows.append([InlineKeyboardButton(label, url=invite)])
+            rows.append([InlineKeyboardButton("عضویت", url=invite)])
         else:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        f"{label} (لینک عمومی ندارد)",
+                        "عضویت (لینک عمومی ندارد)",
                         callback_data="noop:no_invite",
                     )
                 ]
