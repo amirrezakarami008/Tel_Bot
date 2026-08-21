@@ -93,3 +93,12 @@ class SupportMessage(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="support_messages")
+
+
+class BotSetting(Base):
+    """Key-value store for bot runtime state (e.g. last announced webinar link)."""
+
+    __tablename__ = "bot_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)

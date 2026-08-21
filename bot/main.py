@@ -21,9 +21,12 @@ def configure_logging(level: str) -> None:
 
 
 async def post_init(application: Application) -> None:
-    del application
     logging.getLogger(__name__).info("Initializing database...")
     await init_db()
+
+    from bot.handlers.webinar import announce_webinar_if_link_changed
+
+    await announce_webinar_if_link_changed(application)
 
 
 def main() -> None:

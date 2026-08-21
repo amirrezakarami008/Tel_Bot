@@ -1,4 +1,4 @@
-"""Admin-only commands: /stats and /broadcast."""
+"""Admin-only commands: /stats, /broadcast, /send_webinar."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from bot.config import get_settings
 from bot.database.models import GiftFileClaim, SupportDirection, SupportMessage, User, WebinarLinkClaim
 from bot.database.session import get_session
+from bot.handlers.webinar import broadcast_webinar_to_all_users, mark_webinar_link_announced
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         gift_count = await session.scalar(select(func.count()).select_from(GiftFileClaim)) or 0
 
-        # Open support: users whose latest support message is still user_to_admin
         last_ids = (
             select(
                 SupportMessage.user_id.label("user_id"),
@@ -92,6 +92,30 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await message.reply_text(f"برودکست تمام شد.\nموفق: {sent}\nناموفق: {failed}")
 
 
+async def send_webinar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the full webinar message (with WEBINAR_LINK from env) to all users."""
+    message = update.effective_message
+    if message is None:
+        return
+    if not _is_admin(update):
+        await message.reply_text("شما دسترسی ادمین ندارید.")
+        return
+
+    settings = get_settings()
+    if not settings.webinar_link:
+        await message.reply_text(
+            "WEBINAR_LINK در .env خالی است.\n"
+            "لینک را در .env بگذارید، ربات را ری‌استارت کنید، دوباره /send_webinar بزنید."
+        )
+        return
+
+    await message.reply_text("در حال ارسال لینک وبینار به همه کاربران…")
+    sent, failed = await broadcast_webinar_to_all_users(context.bot)
+    await mark_webinar_link_announced(settings.webinar_link)
+    await message.reply_text(f"ارسال لینک وبینار تمام شد.\nموفق: {sent}\nناموفق: {failed}")
+
+
 def register(application: Application) -> None:
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("send_webinar", send_webinar_command))

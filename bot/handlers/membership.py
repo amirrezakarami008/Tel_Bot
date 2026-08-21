@@ -121,6 +121,40 @@ async def prompt_force_join(
     await message.reply_text(intro_text, reply_markup=membership_keyboard(check_callback))
 
 
+async def require_membership_or_prompt(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    check_callback: str,
+    intro_text: str,
+    on_success: OnSuccess,
+) -> None:
+    """
+    If the user is already a member of all required channels, deliver immediately.
+    Otherwise show the join + verify buttons.
+    """
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+
+    result = await check_user_membership(context, user.id)
+
+    if result.error:
+        await message.reply_text(result.error_detail or "خطا در بررسی عضویت، بعداً تلاش کنید.")
+        return
+
+    if not result.ok:
+        await prompt_force_join(
+            update,
+            check_callback=check_callback,
+            intro_text=intro_text,
+        )
+        return
+
+    await on_success(update, context)
+
+
 async def handle_membership_check(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,

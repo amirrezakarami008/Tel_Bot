@@ -12,7 +12,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 from bot.config import get_settings
 from bot.database.models import GiftFileClaim
 from bot.database.session import get_session
-from bot.handlers.membership import handle_membership_check, prompt_force_join
+from bot.handlers.membership import handle_membership_check, require_membership_or_prompt
 from bot.utils.users import get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -23,15 +23,6 @@ GATE_TEXT = (
     "برای دریافت فایل‌های هدیه، ابتدا در کانال‌های زیر عضو شوید "
     "و سپس روی دکمه «عضو شدم، بررسی کن» بزنید."
 )
-
-
-async def send_gift_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    del context
-    await prompt_force_join(
-        update,
-        check_callback=VERIFY_CALLBACK,
-        intro_text=GATE_TEXT,
-    )
 
 
 def list_gift_files() -> list[Path]:
@@ -47,29 +38,29 @@ def list_gift_files() -> list[Path]:
 
 
 async def _deliver_gifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    message = update.effective_message
     user = update.effective_user
-    if query is None or query.message is None or user is None:
+    chat = update.effective_chat
+    if message is None or user is None or chat is None:
         return
 
     files = list_gift_files()
     if not files:
-        await query.message.reply_text("در حال حاضر فایل هدیه‌ای موجود نیست. بعداً تلاش کنید.")
+        await message.reply_text("در حال حاضر فایل هدیه‌ای موجود نیست. بعداً تلاش کنید.")
         return
 
-    chat_id = query.message.chat_id
     for file_path in files:
         try:
             with file_path.open("rb") as document:
                 await context.bot.send_document(
-                    chat_id=chat_id,
+                    chat_id=chat.id,
                     document=document,
                     filename=file_path.name,
                     caption=f"🎁 {file_path.name}",
                 )
         except Exception:
             logger.exception("Failed to send gift file %s to user %s", file_path, user.id)
-            await query.message.reply_text(
+            await message.reply_text(
                 f"ارسال فایل «{file_path.name}» با خطا مواجه شد. بعداً تلاش کنید."
             )
             return
@@ -82,8 +73,19 @@ async def _deliver_gifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if existing.scalar_one_or_none() is None:
             session.add(GiftFileClaim(user_id=db_user.id))
 
-    await query.message.reply_text("فایل‌های هدیه با موفقیت ارسال شد.")
+    await message.reply_text("فایل‌های هدیه با موفقیت ارسال شد.")
     logger.info("Gift files claimed by telegram_id=%s count=%s", user.id, len(files))
+
+
+async def send_gift_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check membership first; only show join buttons if needed."""
+    await require_membership_or_prompt(
+        update,
+        context,
+        check_callback=VERIFY_CALLBACK,
+        intro_text=GATE_TEXT,
+        on_success=_deliver_gifts,
+    )
 
 
 async def verify_gift_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

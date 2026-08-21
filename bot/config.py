@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     bot_token: str = Field(..., alias="BOT_TOKEN")
     admin_telegram_ids: str = Field(..., alias="ADMIN_TELEGRAM_IDS")
     required_channels: str = Field(..., alias="REQUIRED_CHANNELS")
-    webinar_link: str = Field(..., alias="WEBINAR_LINK")
+    webinar_link: str | None = Field(default=None, alias="WEBINAR_LINK")
     gift_files_dir: Path = Field(default=Path("./gift_files"), alias="GIFT_FILES_DIR")
     database_url: str = Field(..., alias="DATABASE_URL")
     postgres_user: str | None = Field(default=None, alias="POSTGRES_USER")
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Optional: http://host:port or socks5://host:port (needed when Telegram is blocked)
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
 
-    @field_validator("bot_token", "webinar_link", "database_url", "admin_telegram_ids", "required_channels")
+    @field_validator("bot_token", "database_url", "admin_telegram_ids", "required_channels")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         cleaned = value.strip()
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return cleaned
 
-    @field_validator("telegram_proxy", mode="before")
+    @field_validator("webinar_link", "telegram_proxy", mode="before")
     @classmethod
     def empty_proxy_as_none(cls, value: object) -> object:
         if value is None:
