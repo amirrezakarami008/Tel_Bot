@@ -147,9 +147,19 @@ async def update_webinar(webinar_id: int, **fields: object) -> Webinar:
 
 
 async def delete_webinar(webinar_id: int) -> bool:
+    from sqlalchemy import delete
+
+    from bot.database.models import WebinarLinkClaim, WebinarRegistration
+
     async with get_session() as session:
         webinar = await session.get(Webinar, webinar_id)
         if webinar is None:
             return False
+        await session.execute(
+            delete(WebinarRegistration).where(WebinarRegistration.webinar_id == webinar_id)
+        )
+        await session.execute(
+            delete(WebinarLinkClaim).where(WebinarLinkClaim.webinar_id == webinar_id)
+        )
         await session.delete(webinar)
         return True

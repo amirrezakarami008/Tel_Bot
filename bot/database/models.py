@@ -91,9 +91,15 @@ class Webinar(Base):
         nullable=False,
     )
 
-    claims: Mapped[list[WebinarLinkClaim]] = relationship(back_populates="webinar")
+    claims: Mapped[list[WebinarLinkClaim]] = relationship(
+        back_populates="webinar",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     registrations: Mapped[list[WebinarRegistration]] = relationship(
-        back_populates="webinar"
+        back_populates="webinar",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
