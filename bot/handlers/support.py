@@ -20,12 +20,30 @@ from telegram.ext import (
 from bot.config import get_settings
 from bot.database.models import SupportDirection, SupportMessage
 from bot.database.session import get_session
-from bot.handlers.start import BTN_GIFT, BTN_SUPPORT, BTN_WEBINAR
+from bot.utils.buttons import (
+    BTN_CANCEL,
+    BTN_GIFT,
+    BTN_MANAGE,
+    BTN_SKIP,
+    BTN_STATS,
+    BTN_SUPPORT,
+    LEGACY_WEBINAR_BTN,
+)
+from bot.utils.features import FEATURE_SUPPORT, is_feature_enabled
+from bot.utils.keyboards import main_menu_keyboard
 from bot.utils.users import get_or_create_user
 
 logger = logging.getLogger(__name__)
 
-MENU_BUTTONS = {BTN_WEBINAR, BTN_GIFT, BTN_SUPPORT}
+MENU_BUTTONS = {
+    BTN_GIFT,
+    BTN_SUPPORT,
+    BTN_STATS,
+    BTN_MANAGE,
+    BTN_SKIP,
+    BTN_CANCEL,
+    LEGACY_WEBINAR_BTN,
+}
 
 TICKET_RE = re.compile(r"#TICKET_(\d+)_(\d+)")
 RATE_LIMIT_SECONDS = 10.0
@@ -125,7 +143,16 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
     if settings.is_admin(user.id):
         return
 
-    if message.text and message.text.strip() in MENU_BUTTONS:
+    if message.text and (
+        message.text.strip() in MENU_BUTTONS or message.text.strip().startswith("🔗 ")
+    ):
+        return
+
+    if not await is_feature_enabled(FEATURE_SUPPORT):
+        await message.reply_text(
+            "پشتیبانی فعلاً فعال نیست.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
         return
 
     if _is_rate_limited(user.id):
@@ -167,7 +194,8 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
         header=header,
     )
     await message.reply_text(
-        "پیام شما برای پشتیبانی ارسال شد، پاسخ همین‌جا به شما داده خواهد شد."
+        "پیام شما برای پشتیبانی ارسال شد، پاسخ همین‌جا به شما داده خواهد شد.",
+        reply_markup=await main_menu_keyboard(user.id),
     )
 
 
@@ -257,7 +285,7 @@ async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     del context
     query = update.callback_query
     if query:
-        await query.answer("برای این کانال لینک عمومی در .env تنظیم نشده است.", show_alert=True)
+        await query.answer("برای این کانال لینک عضویت ثبت نشده است.", show_alert=True)
 
 
 def register(application: Application) -> None:

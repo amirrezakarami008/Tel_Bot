@@ -27,7 +27,7 @@ if [[ ! -f .env ]]; then
 fi
 
 # بررسی فیلدهای ضروری در .env (بدون چاپ مقدار)
-required_vars=(BOT_TOKEN ADMIN_TELEGRAM_IDS REQUIRED_CHANNELS WEBINAR_LINK POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL)
+required_vars=(BOT_TOKEN ADMIN_TELEGRAM_IDS POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL)
 missing=()
 for var in "${required_vars[@]}"; do
   # shellcheck disable=SC1091

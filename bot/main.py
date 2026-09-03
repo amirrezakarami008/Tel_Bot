@@ -32,10 +32,6 @@ async def post_init(application: Application) -> None:
         ]
     )
 
-    from bot.handlers.webinar import announce_webinar_if_link_changed
-
-    await announce_webinar_if_link_changed(application)
-
 
 def main() -> None:
     settings = get_settings()

@@ -2,10 +2,11 @@
 
 from telegram.ext import Application
 
-from bot.handlers import admin, gift_files, start, support, webinar
+from bot.handlers import admin, admin_panel, gift_files, start, support, webinar
 
 
 def register_handlers(application: Application) -> None:
+    admin_panel.register(application)
     start.register(application)
     webinar.register(application)
     gift_files.register(application)

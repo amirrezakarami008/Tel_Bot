@@ -10,7 +10,7 @@ from telegram import Update
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
-from bot.config import get_settings
+from bot.utils.channels import channel_label, channel_to_dict, list_required_channels
 from bot.utils.keyboards import membership_keyboard
 
 logger = logging.getLogger(__name__)
@@ -54,8 +54,8 @@ def _humanize_membership_error(chat_label: str, exc: TelegramError) -> str:
     ):
         return (
             f"کانال {chat_label} پیدا نشد.\n"
-            "یوزرنیم را در REQUIRED_CHANNELS درست وارد کنید "
-            "یا برای کانال خصوصی از فرمت -100...:@username استفاده کنید."
+            "از «⚙️ مدیریت منو» کانال را درست وارد کنید "
+            "(برای کانال خصوصی: -100...:@username)."
         )
     if "user not found" in raw:
         return "کاربر در تلگرام پیدا نشد. یک‌بار /start را دوباره بزنید."
@@ -69,17 +69,17 @@ async def check_user_membership(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
 ) -> MembershipResult:
-    """
-    Verify the user is a member of every channel in REQUIRED_CHANNELS.
+    """Verify the user is a member of every active required channel."""
+    channels = await list_required_channels()
+    if not channels:
+        return MembershipResult(ok=True, missing=[], error=False)
 
-    On Telegram API errors (e.g. bot is not a channel admin), returns error=True.
-    """
-    settings = get_settings()
     missing: list[str] = []
 
-    for channel in settings.channels:
-        chat_id = channel["chat_id"]
-        label = f"@{channel['username']}" if channel.get("username") else str(chat_id)
+    for channel in channels:
+        entry = channel_to_dict(channel)
+        chat_id = entry["chat_id"]
+        label = channel_label(channel)
         try:
             member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             status = member.status
@@ -118,7 +118,10 @@ async def prompt_force_join(
     message = update.effective_message
     if message is None:
         return
-    await message.reply_text(intro_text, reply_markup=membership_keyboard(check_callback))
+    await message.reply_text(
+        intro_text,
+        reply_markup=await membership_keyboard(check_callback),
+    )
 
 
 async def require_membership_or_prompt(
@@ -179,7 +182,7 @@ async def handle_membership_check(
         missing = "، ".join(result.missing) if result.missing else "کانال‌های الزامی"
         await query.message.reply_text(  # type: ignore[union-attr]
             f"{NOT_MEMBER_TEXT}\n\nکانال‌های باقی‌مانده: {missing}",
-            reply_markup=membership_keyboard(check_callback),
+            reply_markup=await membership_keyboard(check_callback),
         )
         return
 

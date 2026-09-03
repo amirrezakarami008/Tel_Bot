@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(..., alias="BOT_TOKEN")
     admin_telegram_ids: str = Field(..., alias="ADMIN_TELEGRAM_IDS")
-    required_channels: str = Field(..., alias="REQUIRED_CHANNELS")
+    required_channels: str = Field(default="", alias="REQUIRED_CHANNELS")
     webinar_link: str | None = Field(default=None, alias="WEBINAR_LINK")
     gift_files_dir: Path = Field(default=Path("./gift_files"), alias="GIFT_FILES_DIR")
     database_url: str = Field(..., alias="DATABASE_URL")
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Optional: http://host:port or socks5://host:port (needed when Telegram is blocked)
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
 
-    @field_validator("bot_token", "database_url", "admin_telegram_ids", "required_channels")
+    @field_validator("bot_token", "database_url", "admin_telegram_ids")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         cleaned = value.strip()
@@ -44,9 +44,18 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return cleaned
 
+    @field_validator("required_channels", mode="before")
+    @classmethod
+    def strip_required_channels(cls, value: object) -> object:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
     @field_validator("webinar_link", "telegram_proxy", mode="before")
     @classmethod
-    def empty_proxy_as_none(cls, value: object) -> object:
+    def empty_optional_as_none(cls, value: object) -> object:
         if value is None:
             return None
         if isinstance(value, str):
@@ -74,18 +83,11 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_TELEGRAM_IDS must contain at least one ID")
         return ids
 
-    @property
-    def channels(self) -> list[dict[str, str]]:
-        """
-        Parse REQUIRED_CHANNELS into structured entries.
-
-        Supported comma-separated formats:
-        - @channel_username
-        - channel_username
-        - -1001234567890:@channel_username  (numeric id + username for invite link)
-        - -1001234567890
-        """
+    def env_channel_entries(self) -> list[dict[str, str]]:
+        """Parse REQUIRED_CHANNELS for one-time DB seeding. Empty is allowed."""
         result: list[dict[str, str]] = []
+        if not self.required_channels:
+            return result
         for part in self.required_channels.split(","):
             part = _strip_inline_comment(part)
             if not part:
@@ -107,9 +109,6 @@ class Settings(BaseSettings):
                 entry["username"] = username
                 entry["invite_link"] = f"https://t.me/{username}"
             result.append(entry)
-
-        if not result:
-            raise ValueError("REQUIRED_CHANNELS must contain at least one channel")
         return result
 
     def is_admin(self, telegram_id: int) -> bool:

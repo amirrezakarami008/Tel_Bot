@@ -1,4 +1,4 @@
-"""Feature 1: gated webinar link delivery."""
+"""Gated webinar registration: free / certificate + receipt review."""
 
 from __future__ import annotations
 
@@ -6,134 +6,589 @@ import asyncio
 import logging
 
 from sqlalchemy import select
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from bot.config import get_settings
-from bot.database.models import BotSetting, User, WebinarLinkClaim
+from bot.database.models import RegistrationKind, RegistrationStatus, User, WebinarLinkClaim
 from bot.database.session import get_session
 from bot.handlers.membership import handle_membership_check, require_membership_or_prompt
+from bot.utils.buttons import LEGACY_WEBINAR_BTN
+from bot.utils.keyboards import main_menu_keyboard
+from bot.utils.payment import format_payment_instructions, get_payment_card
+from bot.utils.registrations import (
+    KIND_LABELS,
+    STATUS_LABELS,
+    get_registration,
+    get_registration_by_id,
+    list_approved_telegram_ids,
+    registration_summary,
+    set_registration_status,
+    upsert_registration,
+)
 from bot.utils.users import get_or_create_user
-from bot.utils.webinar_text import build_webinar_message
+from bot.utils.webinars import (
+    build_webinar_message,
+    find_webinar_by_button,
+    get_webinar,
+    list_visible_webinars,
+    update_webinar,
+)
 
 logger = logging.getLogger(__name__)
 
-VERIFY_CALLBACK = "check_membership:webinar"
-ANNOUNCED_LINK_KEY = "announced_webinar_link"
+VERIFY_PREFIX = "check_membership:webinar:"
+AWAITING_RECEIPT_KEY = "awaiting_receipt_webinar_id"
 
 GATE_TEXT = (
-    "برای دریافت لینک وبینار، ابتدا در کانال‌های زیر عضو شوید "
+    "برای ثبت‌نام در وبینار، ابتدا در کانال‌های زیر عضو شوید "
     "و سپس روی دکمه «عضو شدم، بررسی کن» بزنید."
 )
 
 
-async def _record_claim(tg_user) -> None:
+def _track_choice_keyboard(webinar_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🆓 بدون مدرک (رایگان)",
+                    callback_data=f"wb:reg:{webinar_id}:free",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎓 با مدرک",
+                    callback_data=f"wb:reg:{webinar_id}:cert",
+                )
+            ],
+        ]
+    )
+
+
+def _receipt_review_keyboard(registration_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ تایید پرداخت",
+                    callback_data=f"wb:pay:ok:{registration_id}",
+                ),
+                InlineKeyboardButton(
+                    "❌ رد رسید",
+                    callback_data=f"wb:pay:no:{registration_id}",
+                ),
+            ]
+        ]
+    )
+
+
+def _registration_admin_keyboard(registration_id: int, status: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if status != RegistrationStatus.APPROVED.value:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "✅ تایید",
+                    callback_data=f"wb:pay:ok:{registration_id}",
+                )
+            ]
+        )
+    if status != RegistrationStatus.REJECTED.value:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "❌ نامعتبر",
+                    callback_data=f"wb:pay:no:{registration_id}",
+                )
+            ]
+        )
+    if status == RegistrationStatus.REJECTED.value:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🔄 بازگشت به انتظار پرداخت",
+                    callback_data=f"wb:pay:reset:{registration_id}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
+
+
+async def _record_claim(tg_user, webinar_id: int) -> None:
     async with get_session() as session:
         db_user = await get_or_create_user(session, tg_user)
         existing = await session.execute(
-            select(WebinarLinkClaim).where(WebinarLinkClaim.user_id == db_user.id)
+            select(WebinarLinkClaim).where(
+                WebinarLinkClaim.user_id == db_user.id,
+                WebinarLinkClaim.webinar_id == webinar_id,
+            )
         )
         if existing.scalar_one_or_none() is None:
-            session.add(WebinarLinkClaim(user_id=db_user.id))
+            session.add(WebinarLinkClaim(user_id=db_user.id, webinar_id=webinar_id))
 
 
-async def _deliver_webinar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    del context
+async def _approved_message(webinar) -> str:
+    when = webinar.time_text or "زمان اعلام‌شده"
+    return (
+        f"✅ پیش‌ثبت‌نام شما برای «{webinar.title}» انجام شد.\n\n"
+        f"لینک ورود در ساعت {when} همین‌جا براتون ارسال می‌شه."
+    )
+
+
+async def _start_registration_flow(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    webinar_id: int,
+) -> None:
     message = update.effective_message
     user = update.effective_user
     if message is None or user is None:
         return
 
-    await _record_claim(user)
-    await message.reply_text(build_webinar_message())
-    logger.info("Webinar message delivered to telegram_id=%s", user.id)
+    webinar = await get_webinar(webinar_id)
+    if webinar is None or not webinar.is_visible:
+        await message.reply_text(
+            "این وبینار دیگر در دسترس نیست.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+
+    async with get_session() as session:
+        db_user = await get_or_create_user(session, user)
+        user_pk = db_user.id
+
+    existing = await get_registration(user_pk, webinar_id)
+    if existing and existing.status == RegistrationStatus.APPROVED.value:
+        await message.reply_text(
+            f"شما قبلاً برای «{webinar.title}» پیش‌ثبت‌نام شده‌اید.\n"
+            + (
+                f"لینک در ساعت {webinar.time_text} ارسال می‌شود."
+                if webinar.time_text
+                else "لینک به‌زودی ارسال می‌شود."
+            ),
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+    if existing and existing.status == RegistrationStatus.PENDING_REVIEW.value:
+        await message.reply_text(
+            "رسید شما دریافت شده و در انتظار بررسی ادمین است.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+    if existing and existing.status == RegistrationStatus.PENDING_PAYMENT.value:
+        await _prompt_payment(message, context, webinar)
+        return
+    if existing and existing.status == RegistrationStatus.REJECTED.value:
+        await message.reply_text(
+            "ثبت‌نام قبلی شما نامعتبر اعلام شده است.\n"
+            "برای پیگیری با پشتیبانی در ارتباط باشید؛ "
+            "یا اگر ادمین وضعیت را باز کند می‌توانید دوباره اقدام کنید.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+
+    intro = build_webinar_message(webinar)
+    if webinar.has_certificate:
+        await message.reply_text(
+            intro + "\n\nنوع ثبت‌نام را انتخاب کنید:",
+            reply_markup=_track_choice_keyboard(webinar_id),
+        )
+        return
+
+    await upsert_registration(
+        user,
+        webinar_id=webinar_id,
+        kind=RegistrationKind.FREE.value,
+        status=RegistrationStatus.APPROVED.value,
+    )
+    await message.reply_text(
+        await _approved_message(webinar),
+        reply_markup=await main_menu_keyboard(user.id),
+    )
 
 
-async def send_webinar_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check membership first; only show join buttons if needed."""
+async def _prompt_payment(message, context: ContextTypes.DEFAULT_TYPE, webinar) -> None:
+    card_number, card_holder = await get_payment_card()
+    if not card_number:
+        await message.reply_text(
+            "ثبت‌نام با مدرک فعلاً ممکن نیست؛ تنظیمات پرداخت کامل نیست. با پشتیبانی تماس بگیرید.",
+            reply_markup=await main_menu_keyboard(message.chat_id),
+        )
+        return
+    context.user_data[AWAITING_RECEIPT_KEY] = webinar.id
+    text = format_payment_instructions(
+        price=webinar.certificate_price,
+        card_number=card_number,
+        card_holder=card_holder,
+    )
+    await message.reply_text(text, reply_markup=await main_menu_keyboard(message.chat_id))
+
+
+async def send_webinar_gate(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    webinar_id: int,
+) -> None:
+    webinar = await get_webinar(webinar_id)
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None:
+        return
+    if webinar is None or not webinar.is_visible:
+        await message.reply_text(
+            "این وبینار فعلاً فعال نیست.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+
+    async def on_success(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await _start_registration_flow(upd, ctx, webinar_id)
+
     await require_membership_or_prompt(
         update,
         context,
-        check_callback=VERIFY_CALLBACK,
+        check_callback=f"{VERIFY_PREFIX}{webinar_id}",
         intro_text=GATE_TEXT,
-        on_success=_deliver_webinar,
+        on_success=on_success,
     )
+
+
+async def webinar_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.message.text is None or update.effective_user is None:
+        return
+
+    text = update.message.text.strip()
+    webinar = await find_webinar_by_button(text)
+    if webinar is None and text == LEGACY_WEBINAR_BTN:
+        visible = await list_visible_webinars()
+        if len(visible) == 1:
+            webinar = visible[0]
+        elif not visible:
+            await update.message.reply_text(
+                "در حال حاضر وبینار فعالی وجود ندارد.",
+                reply_markup=await main_menu_keyboard(update.effective_user.id),
+            )
+            return
+        else:
+            await update.message.reply_text(
+                "چند وبینار فعال است. از منوی زیر یکی را انتخاب کنید.",
+                reply_markup=await main_menu_keyboard(update.effective_user.id),
+            )
+            return
+
+    if webinar is None:
+        await update.message.reply_text(
+            "این گزینه دیگر فعال نیست.",
+            reply_markup=await main_menu_keyboard(update.effective_user.id),
+        )
+        return
+
+    await send_webinar_gate(update, context, webinar.id)
 
 
 async def verify_webinar_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    webinar_id = int(query.data.rsplit(":", 1)[-1])
+
+    async def on_success(upd: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await _start_registration_flow(upd, ctx, webinar_id)
+
     await handle_membership_check(
         update,
         context,
-        check_callback=VERIFY_CALLBACK,
-        on_success=_deliver_webinar,
+        check_callback=f"{VERIFY_PREFIX}{webinar_id}",
+        on_success=on_success,
     )
 
 
-async def broadcast_webinar_to_all_users(bot) -> tuple[int, int]:
-    """Send the linked webinar message to every registered user. Returns (sent, failed)."""
+async def registration_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if query is None or query.data is None or user is None or query.message is None:
+        return
+
+    # wb:reg:<webinar_id>:free|cert
+    parts = query.data.split(":")
+    webinar_id = int(parts[2])
+    choice = parts[3]
+    webinar = await get_webinar(webinar_id)
+    if webinar is None or not webinar.is_visible:
+        await query.answer("وبینار در دسترس نیست.", show_alert=True)
+        return
+
+    await query.answer()
+    if choice == "free":
+        await upsert_registration(
+            user,
+            webinar_id=webinar_id,
+            kind=RegistrationKind.FREE.value,
+            status=RegistrationStatus.APPROVED.value,
+        )
+        context.user_data.pop(AWAITING_RECEIPT_KEY, None)
+        await query.message.reply_text(
+            await _approved_message(webinar),
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
+
+    if not webinar.has_certificate:
+        await query.message.reply_text("این وبینار گزینه مدرک ندارد.")
+        return
+
+    await upsert_registration(
+        user,
+        webinar_id=webinar_id,
+        kind=RegistrationKind.CERTIFICATE.value,
+        status=RegistrationStatus.PENDING_PAYMENT.value,
+    )
+    await _prompt_payment(query.message, context, webinar)
+
+
+async def handle_receipt_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    webinar_id = context.user_data.get(AWAITING_RECEIPT_KEY)
+    if not webinar_id:
+        return
+
+    message = update.message
+    user = update.effective_user
+    if message is None or user is None:
+        return
+
+    file_id = None
+    file_type = None
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        file_type = "photo"
+    elif message.document:
+        file_id = message.document.file_id
+        file_type = "document"
+    else:
+        await message.reply_text("لطفاً عکس یا فایل رسید را ارسال کنید.")
+        raise ApplicationHandlerStop
+
+    webinar = await get_webinar(int(webinar_id))
+    if webinar is None:
+        context.user_data.pop(AWAITING_RECEIPT_KEY, None)
+        await message.reply_text("وبینار پیدا نشد.")
+        raise ApplicationHandlerStop
+
+    reg = await upsert_registration(
+        user,
+        webinar_id=webinar.id,
+        kind=RegistrationKind.CERTIFICATE.value,
+        status=RegistrationStatus.PENDING_REVIEW.value,
+        receipt_file_id=file_id,
+        receipt_file_type=file_type,
+    )
+    context.user_data.pop(AWAITING_RECEIPT_KEY, None)
+    reg = await get_registration_by_id(reg.id) or reg
+
+    await message.reply_text(
+        "رسید دریافت شد و برای بررسی ادمین ارسال شد.\nپس از تایید، پیش‌ثبت‌نام شما قطعی می‌شود.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+
     settings = get_settings()
-    if not settings.webinar_link:
+    caption = (
+        "🧾 رسید پرداخت وبینار\n\n"
+        f"{registration_summary(reg)}\n"
+        f"وبینار: {webinar.title}\n"
+        f"مبلغ: {webinar.certificate_price or '—'}"
+    )
+    for admin_id in settings.admin_ids:
+        try:
+            if file_type == "photo":
+                await context.bot.send_photo(
+                    chat_id=admin_id,
+                    photo=file_id,
+                    caption=caption,
+                    reply_markup=_receipt_review_keyboard(reg.id),
+                )
+            else:
+                await context.bot.send_document(
+                    chat_id=admin_id,
+                    document=file_id,
+                    caption=caption,
+                    reply_markup=_receipt_review_keyboard(reg.id),
+                )
+        except TelegramError as exc:
+            logger.error("Failed to notify admin %s about receipt: %s", admin_id, exc)
+
+    raise ApplicationHandlerStop
+
+
+async def payment_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    admin = update.effective_user
+    if query is None or query.data is None or admin is None:
+        return
+    if not get_settings().is_admin(admin.id):
+        await query.answer("فقط ادمین.", show_alert=True)
+        return
+
+    # wb:pay:ok|no|reset:<registration_id>
+    parts = query.data.split(":")
+    action = parts[2]
+    registration_id = int(parts[3])
+    reg = await get_registration_by_id(registration_id)
+    if reg is None:
+        await query.answer("ثبت‌نام پیدا نشد.", show_alert=True)
+        return
+
+    webinar = reg.webinar
+    user = reg.user
+    if user is None:
+        await query.answer("کاربر پیدا نشد.", show_alert=True)
+        return
+
+    if action == "ok":
+        await set_registration_status(
+            registration_id,
+            status=RegistrationStatus.APPROVED.value,
+            admin_telegram_id=admin.id,
+        )
+        await query.answer("تایید شد")
+        try:
+            await context.bot.send_message(
+                chat_id=user.telegram_id,
+                text=(
+                    f"✅ پرداخت شما برای وبینار «{webinar.title if webinar else ''}» تایید شد.\n"
+                    "پیش‌ثبت‌نام با مدرک انجام شد.\n"
+                    + (
+                        f"لینک در ساعت {webinar.time_text} همین‌جا ارسال می‌شود."
+                        if webinar and webinar.time_text
+                        else "لینک به‌زودی همین‌جا ارسال می‌شود."
+                    )
+                ),
+            )
+        except TelegramError as exc:
+            logger.warning("Notify approved user failed: %s", exc)
+        note = f"وضعیت ثبت‌نام #{registration_id}: تایید شد."
+    elif action == "no":
+        await set_registration_status(
+            registration_id,
+            status=RegistrationStatus.REJECTED.value,
+            admin_telegram_id=admin.id,
+            admin_note="رسید نامعتبر",
+        )
+        await query.answer("رد شد")
+        try:
+            await context.bot.send_message(
+                chat_id=user.telegram_id,
+                text=(
+                    f"❌ رسید ارسالی برای وبینار «{webinar.title if webinar else ''}» تایید نشد "
+                    "(واریز معتبر تشخیص داده نشد).\n\n"
+                    "لطفاً از طریق پشتیبانی پیگیری کنید تا وضعیت بررسی شود."
+                ),
+                reply_markup=await main_menu_keyboard(user.telegram_id),
+            )
+        except TelegramError as exc:
+            logger.warning("Notify rejected user failed: %s", exc)
+        note = f"وضعیت ثبت‌نام #{registration_id}: رد / نامعتبر."
+    else:
+        await set_registration_status(
+            registration_id,
+            status=RegistrationStatus.PENDING_PAYMENT.value,
+            admin_telegram_id=admin.id,
+        )
+        await query.answer("به انتظار پرداخت برگشت")
+        try:
+            await context.bot.send_message(
+                chat_id=user.telegram_id,
+                text=(
+                    f"وضعیت ثبت‌نام شما برای «{webinar.title if webinar else ''}» "
+                    "به حالت انتظار پرداخت برگشت. می‌توانید دوباره رسید معتبر ارسال کنید."
+                ),
+            )
+        except TelegramError as exc:
+            logger.warning("Notify reset user failed: %s", exc)
+        note = f"وضعیت ثبت‌نام #{registration_id}: بازگشت به انتظار پرداخت."
+
+    try:
+        if query.message:
+            await query.message.reply_text(note)
+    except TelegramError:
+        pass
+
+
+async def broadcast_webinar_to_registrants(bot, webinar_id: int) -> tuple[int, int]:
+    webinar = await get_webinar(webinar_id)
+    if webinar is None or not webinar.link:
         return 0, 0
 
-    text = build_webinar_message(settings.webinar_link)
-
-    async with get_session() as session:
-        result = await session.execute(select(User.telegram_id))
-        telegram_ids = [row[0] for row in result.all()]
+    text = build_webinar_message(webinar)
+    telegram_ids = await list_approved_telegram_ids(webinar_id)
+    guest_markup = await main_menu_keyboard()
+    admin_ids = set(get_settings().admin_ids)
 
     sent = 0
     failed = 0
     for telegram_id in telegram_ids:
+        markup = await main_menu_keyboard(telegram_id) if telegram_id in admin_ids else guest_markup
         try:
-            await bot.send_message(chat_id=telegram_id, text=text)
+            await bot.send_message(chat_id=telegram_id, text=text, reply_markup=markup)
+            # also record claim
+            async with get_session() as session:
+                result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+                db_user = result.scalar_one_or_none()
+                if db_user is not None:
+                    existing = await session.execute(
+                        select(WebinarLinkClaim).where(
+                            WebinarLinkClaim.user_id == db_user.id,
+                            WebinarLinkClaim.webinar_id == webinar_id,
+                        )
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        session.add(
+                            WebinarLinkClaim(user_id=db_user.id, webinar_id=webinar_id)
+                        )
             sent += 1
         except TelegramError as exc:
             failed += 1
-            logger.warning("Webinar broadcast failed for %s: %s", telegram_id, exc)
+            logger.warning("Webinar link send failed for %s: %s", telegram_id, exc)
         await asyncio.sleep(0.05)
 
+    await update_webinar(webinar_id, link_auto_sent=True)
     return sent, failed
 
 
-async def _get_announced_link() -> str | None:
-    async with get_session() as session:
-        row = await session.get(BotSetting, ANNOUNCED_LINK_KEY)
-        return row.value if row else None
-
-
-async def mark_webinar_link_announced(link: str) -> None:
-    async with get_session() as session:
-        row = await session.get(BotSetting, ANNOUNCED_LINK_KEY)
-        if row is None:
-            session.add(BotSetting(key=ANNOUNCED_LINK_KEY, value=link))
-        else:
-            row.value = link
-
-
-async def announce_webinar_if_link_changed(application: Application) -> None:
-    """
-    On startup: if WEBINAR_LINK is set and differs from the last announced value,
-    send the full message to all registered users.
-    """
-    settings = get_settings()
-    link = settings.webinar_link
-    if not link:
-        logger.info("WEBINAR_LINK empty — skipping auto-announce")
-        return
-
-    previous = await _get_announced_link()
-    if previous == link:
-        logger.info("WEBINAR_LINK unchanged — skipping auto-announce")
-        return
-
-    logger.info("New WEBINAR_LINK detected — announcing to all users")
-    sent, failed = await broadcast_webinar_to_all_users(application.bot)
-    await mark_webinar_link_announced(link)
-    logger.info("Webinar auto-announce done. sent=%s failed=%s", sent, failed)
+# Backward-compatible alias used by admin panel
+async def broadcast_webinar_to_all_users(bot, webinar_id: int) -> tuple[int, int]:
+    return await broadcast_webinar_to_registrants(bot, webinar_id)
 
 
 def register(application: Application) -> None:
     application.add_handler(
-        CallbackQueryHandler(verify_webinar_membership, pattern=rf"^{VERIFY_CALLBACK}$")
+        CallbackQueryHandler(verify_webinar_membership, pattern=rf"^{VERIFY_PREFIX}\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(registration_choice_callback, pattern=r"^wb:reg:\d+:(free|cert)$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(payment_review_callback, pattern=r"^wb:pay:(ok|no|reset):\d+$")
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.Regex(r"^🔗 "),
+            webinar_button_handler,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE
+            & ~filters.COMMAND
+            & (filters.PHOTO | filters.Document.ALL),
+            handle_receipt_upload,
+        ),
+        group=1,
     )

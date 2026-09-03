@@ -13,6 +13,8 @@ from bot.config import get_settings
 from bot.database.models import GiftFileClaim
 from bot.database.session import get_session
 from bot.handlers.membership import handle_membership_check, require_membership_or_prompt
+from bot.utils.features import FEATURE_GIFT, is_feature_enabled
+from bot.utils.keyboards import main_menu_keyboard
 from bot.utils.users import get_or_create_user
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,10 @@ async def _deliver_gifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     files = list_gift_files()
     if not files:
-        await message.reply_text("در حال حاضر فایل هدیه‌ای موجود نیست. بعداً تلاش کنید.")
+        await message.reply_text(
+            "در حال حاضر فایل هدیه‌ای موجود نیست. بعداً تلاش کنید.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
         return
 
     for file_path in files:
@@ -73,12 +78,25 @@ async def _deliver_gifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if existing.scalar_one_or_none() is None:
             session.add(GiftFileClaim(user_id=db_user.id))
 
-    await message.reply_text("فایل‌های هدیه با موفقیت ارسال شد.")
+    await message.reply_text(
+        "فایل‌های هدیه با موفقیت ارسال شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
     logger.info("Gift files claimed by telegram_id=%s count=%s", user.id, len(files))
 
 
 async def send_gift_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Check membership first; only show join buttons if needed."""
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+    if not await is_feature_enabled(FEATURE_GIFT):
+        await message.reply_text(
+            "دریافت فایل هدیه فعلاً فعال نیست.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return
     await require_membership_or_prompt(
         update,
         context,
@@ -89,6 +107,11 @@ async def send_gift_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def verify_gift_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if query is not None and user is not None and not await is_feature_enabled(FEATURE_GIFT):
+        await query.answer("این گزینه فعلاً فعال نیست.", show_alert=True)
+        return
     await handle_membership_check(
         update,
         context,

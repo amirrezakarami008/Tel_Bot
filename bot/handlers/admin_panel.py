@@ -1,0 +1,974 @@
+"""Admin panel: feature toggles and dynamic webinar management."""
+
+from __future__ import annotations
+
+import logging
+import re
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram.error import TelegramError
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from bot.config import get_settings
+from bot.utils.buttons import BTN_CANCEL, BTN_MANAGE, BTN_SKIP
+from bot.utils.channels import (
+    channel_label,
+    create_required_channel,
+    delete_required_channel,
+    get_required_channel,
+    normalize_invite_link,
+    parse_channel_input,
+)
+from bot.utils.features import FEATURE_LABELS, toggle_feature
+from bot.utils.keyboards import (
+    admin_panel_keyboard,
+    channel_manage_keyboard,
+    confirm_keyboard,
+    main_menu_keyboard,
+    registration_list_keyboard,
+    webinar_manage_keyboard,
+    wizard_keyboard,
+)
+from bot.utils.payment import get_payment_card, set_payment_card
+from bot.utils.registrations import (
+    get_registration_by_id,
+    list_registrations_for_webinar,
+    registration_summary,
+)
+from bot.utils.webinars import (
+    DETAILS_MAX,
+    build_webinar_message,
+    create_webinar,
+    delete_webinar,
+    get_webinar,
+    normalize_link,
+    normalize_optional,
+    normalize_title,
+    update_webinar,
+)
+from bot.handlers.webinar import _registration_admin_keyboard
+
+logger = logging.getLogger(__name__)
+
+(
+    ASK_TITLE,
+    ASK_TIME,
+    ASK_DETAILS,
+    ASK_LINK,
+    EDIT_VALUE,
+    ASK_CHANNEL,
+    ASK_CHANNEL_INVITE,
+    ASK_HAS_CERT,
+    ASK_PRICE,
+    ASK_PAYMENT_CARD,
+    ASK_PAYMENT_HOLDER,
+) = range(11)
+
+PANEL_TEXT = (
+    "⚙️ مدیریت منو\n\n"
+    "• دکمه‌ها و کانال‌های اجباری\n"
+    "• وبینار + مدرک/پرداخت\n"
+    "• کارت بانکی برای واریز مدرک"
+)
+
+ADMIN_CALLBACK_PATTERN = (
+    r"^admin:(panel|payment|toggle:|channel:(view|delete|delete_yes):|"
+    r"webinar:(view|toggle|cert|regs|reg|send|send_yes|delete|delete_yes):)"
+)
+
+EDIT_PROMPTS = {
+    "title": "نام جدید وبینار را بفرستید:",
+    "time": "ساعت برگزاری را بفرستید (مثلاً 21:00).\nبرای خالی ماندن «رد شدن» را بزنید.",
+    "details": "جزئیات وبینار را بفرستید.\nبرای خالی ماندن «رد شدن» را بزنید.",
+    "link": "لینک ورود را بفرستید (با https://).\nبرای خالی ماندن «رد شدن» را بزنید.",
+    "price": "مبلغ مدرک را بفرستید (مثلاً ۱۵۰٬۰۰۰ تومان).\nبرای خالی ماندن «رد شدن» را بزنید.",
+}
+
+BTN_CERT_YES = "بله، مدرک دارد"
+BTN_CERT_NO = "خیر، بدون مدرک"
+
+
+def _is_admin(update: Update) -> bool:
+    user = update.effective_user
+    return user is not None and get_settings().is_admin(user.id)
+
+
+def _is_skip(text: str) -> bool:
+    return text.strip() in {BTN_SKIP, "—", "-", "/skip"}
+
+
+def _is_cancel(text: str) -> bool:
+    return text.strip() in {BTN_CANCEL, "/cancel"}
+
+
+def _webinar_view_text(webinar) -> str:
+    cert = "دارد" if webinar.has_certificate else "ندارد"
+    price = webinar.certificate_price or "—"
+    return (
+        f"📺 {webinar.title}\n\n"
+        f"نام: {webinar.title}\n"
+        f"ساعت: {webinar.time_text or '—'}\n"
+        f"لینک: {webinar.link or 'ثبت نشده'}\n"
+        f"جزئیات: {webinar.details or '—'}\n"
+        f"مدرک: {cert}\n"
+        f"مبلغ مدرک: {price}\n"
+        f"دکمه منو: {'نمایش داده می‌شود' if webinar.is_visible else 'مخفی است'}"
+    )
+
+
+def _channel_view_text(channel) -> str:
+    username = f"@{channel.username}" if channel.username else "—"
+    return (
+        "📢 کانال اجباری\n\n"
+        f"عنوان: {channel.title or '—'}\n"
+        f"نمایش: {channel_label(channel)}\n"
+        f"شناسه: {channel.chat_id}\n"
+        f"یوزرنیم: {username}\n"
+        f"لینک عضویت: {channel.invite_link or 'ثبت نشده'}\n\n"
+        "توجه: ربات باید در این کانال ادمین باشد."
+    )
+
+
+async def _show_panel_message(message, *, user_id: int) -> None:
+    await message.reply_text(
+        PANEL_TEXT,
+        reply_markup=await main_menu_keyboard(user_id),
+    )
+    await message.reply_text(
+        "گزینه‌ها:",
+        reply_markup=await admin_panel_keyboard(),
+    )
+
+
+async def open_manage_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None:
+        return
+    if not _is_admin(update):
+        await message.reply_text("شما دسترسی ادمین ندارید.")
+        return
+    await _show_panel_message(message, user_id=user.id)
+
+
+async def _edit_panel(query) -> None:
+    await query.edit_message_text(
+        PANEL_TEXT,
+        reply_markup=await admin_panel_keyboard(),
+    )
+
+
+async def _edit_webinar_view(query, webinar) -> None:
+    await query.edit_message_text(
+        _webinar_view_text(webinar),
+        reply_markup=webinar_manage_keyboard(
+            webinar.id,
+            visible=webinar.is_visible,
+            has_certificate=webinar.has_certificate,
+        ),
+    )
+
+
+async def _edit_channel_view(query, channel) -> None:
+    await query.edit_message_text(
+        _channel_view_text(channel),
+        reply_markup=channel_manage_keyboard(channel.id),
+    )
+
+
+async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+
+    await query.answer()
+    data = query.data
+
+    if data == "admin:panel":
+        await _edit_panel(query)
+        return
+
+    if data == "admin:payment":
+        number, holder = await get_payment_card()
+        await query.edit_message_text(
+            "💳 تنظیمات پرداخت مدرک\n\n"
+            f"شماره کارت: {number or 'ثبت نشده'}\n"
+            f"به نام: {holder or '—'}\n\n"
+            "برای تغییر، دکمه زیر را بزنید.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("✏️ تغییر کارت", callback_data="admin:payment:edit")],
+                    [InlineKeyboardButton("« بازگشت", callback_data="admin:panel")],
+                ]
+            ),
+        )
+        return
+
+    if data.startswith("admin:toggle:"):
+        feature = data.split(":", 2)[2]
+        enabled = await toggle_feature(feature)
+        label = FEATURE_LABELS.get(feature, feature)
+        state = (
+            "روشن شد و در منوی کاربران نمایش داده می‌شود"
+            if enabled
+            else "خاموش شد و از منوی کاربران برداشته شد"
+        )
+        await _edit_panel(query)
+        if query.message:
+            await query.message.reply_text(
+                f"{label} {state}.",
+                reply_markup=await main_menu_keyboard(update.effective_user.id),
+            )
+        return
+
+    if data.startswith("admin:channel:view:"):
+        channel_id = int(data.rsplit(":", 1)[-1])
+        channel = await get_required_channel(channel_id)
+        if channel is None:
+            await _edit_panel(query)
+            return
+        await _edit_channel_view(query, channel)
+        return
+
+    if data.startswith("admin:channel:delete:") and not data.startswith("admin:channel:delete_yes:"):
+        channel_id = int(data.rsplit(":", 1)[-1])
+        channel = await get_required_channel(channel_id)
+        if channel is None:
+            await _edit_panel(query)
+            return
+        await query.edit_message_text(
+            f"کانال «{channel_label(channel)}» از لیست عضویت اجباری حذف شود؟",
+            reply_markup=confirm_keyboard(
+                f"admin:channel:delete_yes:{channel_id}",
+                f"admin:channel:view:{channel_id}",
+            ),
+        )
+        return
+
+    if data.startswith("admin:channel:delete_yes:"):
+        channel_id = int(data.rsplit(":", 1)[-1])
+        await delete_required_channel(channel_id)
+        await _edit_panel(query)
+        if query.message:
+            await query.message.reply_text("کانال از لیست عضویت اجباری حذف شد.")
+        return
+
+    if data.startswith("admin:webinar:view:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.answer("وبینار پیدا نشد.", show_alert=True)
+            await _edit_panel(query)
+            return
+        await _edit_webinar_view(query, webinar)
+        return
+
+    if data.startswith("admin:webinar:toggle:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.answer("وبینار پیدا نشد.", show_alert=True)
+            return
+        webinar = await update_webinar(webinar_id, is_visible=not webinar.is_visible)
+        if webinar.is_visible:
+            note = "دکمه این وبینار به منوی کاربران اضافه شد."
+        else:
+            note = "دکمه این وبینار از منوی کاربران برداشته شد."
+        await _edit_webinar_view(query, webinar)
+        if query.message:
+            await query.message.reply_text(
+                note,
+                reply_markup=await main_menu_keyboard(update.effective_user.id),
+            )
+        return
+
+    if data.startswith("admin:webinar:cert:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await _edit_panel(query)
+            return
+        webinar = await update_webinar(webinar_id, has_certificate=not webinar.has_certificate)
+        await _edit_webinar_view(query, webinar)
+        if query.message:
+            state = "فعال شد" if webinar.has_certificate else "غیرفعال شد"
+            await query.message.reply_text(f"گزینه مدرک {state}.")
+        return
+
+    if data.startswith("admin:webinar:regs:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await _edit_panel(query)
+            return
+        regs = await list_registrations_for_webinar(webinar_id)
+        if not regs:
+            await query.edit_message_text(
+                f"هنوز ثبت‌نامی برای «{webinar.title}» نیست.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("« بازگشت", callback_data=f"admin:webinar:view:{webinar_id}")]]
+                ),
+            )
+            return
+        await query.edit_message_text(
+            f"👥 ثبت‌نام‌های «{webinar.title}» ({len(regs)} نفر)\nروی هر مورد بزنید تا وضعیت را تغییر دهید.",
+            reply_markup=registration_list_keyboard(webinar_id, regs),
+        )
+        return
+
+    if data.startswith("admin:webinar:reg:"):
+        registration_id = int(data.rsplit(":", 1)[-1])
+        reg = await get_registration_by_id(registration_id)
+        if reg is None:
+            await query.answer("ثبت‌نام پیدا نشد.", show_alert=True)
+            return
+        text = (
+            f"📋 جزئیات ثبت‌نام\n\n{registration_summary(reg)}\n"
+            f"وبینار: {reg.webinar.title if reg.webinar else '—'}"
+        )
+        await query.edit_message_text(
+            text,
+            reply_markup=_registration_admin_keyboard(reg.id, reg.status),
+        )
+        if query.message and reg.webinar:
+            await query.message.reply_text(
+                "بازگشت به لیست:",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("« لیست ثبت‌نام‌ها", callback_data=f"admin:webinar:regs:{reg.webinar_id}")]]
+                ),
+            )
+        return
+
+    if data.startswith("admin:webinar:send:") and not data.startswith("admin:webinar:send_yes:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.answer("وبینار پیدا نشد.", show_alert=True)
+            return
+        if not webinar.link:
+            await query.answer("ابتدا لینک وبینار را ثبت کنید.", show_alert=True)
+            return
+        await query.edit_message_text(
+            "لینک فقط برای کسانی که پیش‌ثبت‌نام‌شان تایید شده ارسال می‌شود:\n\n"
+            f"{build_webinar_message(webinar)}\n\n"
+            "ادامه می‌دهید؟",
+            reply_markup=confirm_keyboard(
+                f"admin:webinar:send_yes:{webinar_id}",
+                f"admin:webinar:view:{webinar_id}",
+            ),
+        )
+        return
+
+    if data.startswith("admin:webinar:send_yes:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.answer("وبینار پیدا نشد.", show_alert=True)
+            return
+        from bot.handlers.webinar import broadcast_webinar_to_registrants
+
+        if query.message:
+            await query.message.reply_text("در حال ارسال لینک به ثبت‌نامی‌های تاییدشده…")
+        sent, failed = await broadcast_webinar_to_registrants(context.bot, webinar.id)
+        webinar = await get_webinar(webinar.id) or webinar
+        await query.edit_message_text(
+            f"ارسال تمام شد.\nموفق: {sent}\nناموفق: {failed}\n\n{_webinar_view_text(webinar)}",
+            reply_markup=webinar_manage_keyboard(
+                webinar.id,
+                visible=webinar.is_visible,
+                has_certificate=webinar.has_certificate,
+            ),
+        )
+        return
+
+    if data.startswith("admin:webinar:delete:") and not data.startswith("admin:webinar:delete_yes:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.answer("وبینار پیدا نشد.", show_alert=True)
+            return
+        await query.edit_message_text(
+            f"وبینار «{webinar.title}» حذف شود؟\nدکمه‌اش هم از منوی کاربران برداشته می‌شود.",
+            reply_markup=confirm_keyboard(
+                f"admin:webinar:delete_yes:{webinar_id}",
+                f"admin:webinar:view:{webinar_id}",
+            ),
+        )
+        return
+
+    if data.startswith("admin:webinar:delete_yes:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        await delete_webinar(webinar_id)
+        await _edit_panel(query)
+        if query.message:
+            await query.message.reply_text(
+                "وبینار حذف شد و دکمه از منو برداشته شد.",
+                reply_markup=await main_menu_keyboard(update.effective_user.id),
+            )
+
+
+async def start_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    context.user_data.clear()
+    context.user_data["draft"] = {}
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "نام وبینار را بفرستید.\nهمین نام روی دکمه منو نمایش داده می‌شود.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_TITLE
+
+
+async def start_channel_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    context.user_data.clear()
+    context.user_data["channel_draft"] = {}
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "کانال اجباری را بفرستید.\n\n"
+        "مثال‌ها:\n"
+        "• @mychannel\n"
+        "• https://t.me/mychannel\n"
+        "• -1001234567890:@mychannel\n"
+        "• -1001234567890\n\n"
+        "قبل از افزودن، ربات را در آن کانال ادمین کنید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_CHANNEL
+
+
+async def _resolve_channel_with_bot(bot, parsed: dict[str, str | None]) -> dict[str, str | None]:
+    chat_id = parsed.get("chat_id")
+    if not chat_id:
+        raise ValueError("شناسه کانال مشخص نیست.")
+    try:
+        chat = await bot.get_chat(chat_id)
+    except TelegramError as exc:
+        raise ValueError(
+            "ربات این کانال را پیدا نکرد یا به آن دسترسی ندارد.\n"
+            "ربات را ادمین کانال کنید و دوباره تلاش کنید.\n"
+            f"جزئیات: {exc}"
+        ) from exc
+
+    username = getattr(chat, "username", None) or parsed.get("username")
+    title = getattr(chat, "title", None) or parsed.get("title")
+    store_chat_id = f"@{username}" if username else str(chat.id)
+    invite = parsed.get("invite_link")
+    if not invite and username:
+        invite = f"https://t.me/{username}"
+    return {
+        "chat_id": store_chat_id,
+        "username": username,
+        "title": title,
+        "invite_link": invite,
+    }
+
+
+async def _save_channel_draft(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    draft = context.user_data.get("channel_draft") or {}
+    if message is None or user is None:
+        return ConversationHandler.END
+    try:
+        channel = await create_required_channel(
+            chat_id=str(draft["chat_id"]),
+            username=draft.get("username"),
+            title=draft.get("title"),
+            invite_link=draft.get("invite_link"),
+        )
+    except (KeyError, ValueError) as exc:
+        await message.reply_text(str(exc) if str(exc) else "ثبت کانال ناموفق بود.")
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    await message.reply_text(
+        f"کانال «{channel_label(channel)}» به لیست عضویت اجباری اضافه شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await message.reply_text(
+        _channel_view_text(channel),
+        reply_markup=channel_manage_keyboard(channel.id),
+    )
+    return ConversationHandler.END
+
+
+async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_CHANNEL
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        parsed = parse_channel_input(message.text)
+        resolved = await _resolve_channel_with_bot(context.bot, parsed)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        return ASK_CHANNEL
+
+    context.user_data["channel_draft"] = resolved
+    if resolved.get("invite_link"):
+        return await _save_channel_draft(update, context)
+
+    await message.reply_text(
+        "لینک عضویت این کانال را بفرستید (مثلاً لینک دعوت خصوصی).\n"
+        "بدون لینک، دکمه عضویت برای کاربر ساخته نمی‌شود.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_CHANNEL_INVITE
+
+
+async def receive_channel_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_CHANNEL_INVITE
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        invite = normalize_invite_link(message.text)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        return ASK_CHANNEL_INVITE
+    draft = context.user_data.setdefault("channel_draft", {})
+    draft["invite_link"] = invite
+    return await _save_channel_draft(update, context)
+
+
+async def start_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    # admin:webinar:edit:<id>:<field>
+    parts = query.data.split(":")
+    field = parts[-1]
+    webinar_id = int(parts[-2])
+    if field not in EDIT_PROMPTS:
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    context.user_data["edit_id"] = webinar_id
+    context.user_data["edit_field"] = field
+    optional = field != "title"
+    await query.message.reply_text(  # type: ignore[union-attr]
+        EDIT_PROMPTS[field],
+        reply_markup=wizard_keyboard(optional=optional),
+    )
+    return EDIT_VALUE
+
+
+async def _maybe_leave_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return None
+    text = message.text.strip()
+    if _is_cancel(text):
+        return await _cancel_conversation(update, context)
+    if text == BTN_MANAGE:
+        context.user_data.clear()
+        await open_manage_panel(update, context)
+        return ConversationHandler.END
+    return None
+
+
+async def _cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    user = update.effective_user
+    message = update.effective_message
+    if message is not None and user is not None:
+        await message.reply_text(
+            "انصراف داده شد.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+    return ConversationHandler.END
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await _cancel_conversation(update, context)
+
+
+async def cancel_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    from bot.handlers.start import start_command
+
+    await start_command(update, context)
+    return ConversationHandler.END
+
+
+async def fallback_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await panel_callback(update, context)
+    return ConversationHandler.END
+
+
+async def receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_TITLE
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        title = normalize_title(message.text)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        return ASK_TITLE
+    context.user_data.setdefault("draft", {})["title"] = title
+    await message.reply_text(
+        "ساعت برگزاری را بفرستید (مثلاً 21:00).\nاگر لازم نیست «رد شدن» را بزنید.",
+        reply_markup=wizard_keyboard(optional=True),
+    )
+    return ASK_TIME
+
+
+async def receive_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_TIME
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        time_text = None if _is_skip(message.text) else normalize_optional(message.text, max_len=64)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        return ASK_TIME
+    context.user_data.setdefault("draft", {})["time_text"] = time_text
+    await message.reply_text(
+        "جزئیات را بفرستید (مثلاً نحوه ورود).\nاگر لازم نیست «رد شدن» را بزنید.",
+        reply_markup=wizard_keyboard(optional=True),
+    )
+    return ASK_DETAILS
+
+
+async def receive_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_DETAILS
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        details = None if _is_skip(message.text) else normalize_optional(message.text, max_len=DETAILS_MAX)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        return ASK_DETAILS
+    context.user_data.setdefault("draft", {})["details"] = details
+    await message.reply_text(
+        "لینک ورود را بفرستید (با https://).\nاگر هنوز آماده نیست «رد شدن» را بزنید؛ بعداً می‌توانید اضافه کنید.",
+        reply_markup=wizard_keyboard(optional=True),
+    )
+    return ASK_LINK
+
+
+async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return ASK_LINK
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        link = None if _is_skip(message.text) else normalize_link(message.text)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        return ASK_LINK
+
+    context.user_data.setdefault("draft", {})["link"] = link
+    await message.reply_text(
+        "آیا این وبینار گزینه «با مدرک» دارد؟",
+        reply_markup=ReplyKeyboardMarkup(
+            [[BTN_CERT_YES], [BTN_CERT_NO], [BTN_CANCEL]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
+    return ASK_HAS_CERT
+
+
+async def receive_has_cert(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return ASK_HAS_CERT
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    text = message.text.strip()
+    if text == BTN_CERT_YES:
+        context.user_data.setdefault("draft", {})["has_certificate"] = True
+        await message.reply_text(
+            "مبلغ مدرک را بفرستید (مثلاً ۱۵۰٬۰۰۰ تومان).",
+            reply_markup=wizard_keyboard(optional=True),
+        )
+        return ASK_PRICE
+    if text == BTN_CERT_NO:
+        context.user_data.setdefault("draft", {})["has_certificate"] = False
+        context.user_data.setdefault("draft", {})["certificate_price"] = None
+        return await _finish_webinar_create(update, context)
+    await message.reply_text(
+        "یکی از گزینه‌های کیبورد را انتخاب کنید.",
+        reply_markup=ReplyKeyboardMarkup(
+            [[BTN_CERT_YES], [BTN_CERT_NO], [BTN_CANCEL]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
+    return ASK_HAS_CERT
+
+
+async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_PRICE
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        price = None if _is_skip(message.text) else normalize_optional(message.text, max_len=120)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        return ASK_PRICE
+    context.user_data.setdefault("draft", {})["certificate_price"] = price
+    return await _finish_webinar_create(update, context)
+
+
+async def _finish_webinar_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None:
+        return ConversationHandler.END
+    draft = context.user_data.get("draft") or {}
+    try:
+        webinar = await create_webinar(
+            title=draft["title"],
+            time_text=draft.get("time_text"),
+            details=draft.get("details"),
+            link=draft.get("link"),
+            is_visible=True,
+            has_certificate=bool(draft.get("has_certificate")),
+            certificate_price=draft.get("certificate_price"),
+        )
+    except KeyError:
+        await message.reply_text("ثبت وبینار ناموفق بود. دوباره از مدیریت منو شروع کنید.")
+        return ConversationHandler.END
+    except ValueError as exc:
+        await message.reply_text(
+            f"{exc}\nنام دیگری بفرستید:",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_TITLE
+
+    context.user_data.clear()
+    await message.reply_text(
+        "وبینار ثبت شد و دکمه‌اش به منوی کاربران اضافه شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await message.reply_text(
+        _webinar_view_text(webinar),
+        reply_markup=webinar_manage_keyboard(
+            webinar.id,
+            visible=webinar.is_visible,
+            has_certificate=webinar.has_certificate,
+        ),
+    )
+    return ConversationHandler.END
+
+
+async def start_payment_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    context.user_data.clear()
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "شماره کارت را بفرستید (فقط عدد، با یا بدون خط تیره).",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_PAYMENT_CARD
+
+
+async def receive_payment_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    if message is None or message.text is None:
+        return ASK_PAYMENT_CARD
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    number = re.sub(r"\s+", "", message.text.strip())
+    if len(re.sub(r"\D", "", number)) < 12:
+        await message.reply_text(
+            "شماره کارت معتبر به نظر نمی‌رسد. دوباره بفرستید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_PAYMENT_CARD
+    context.user_data["payment_card_number"] = number
+    await message.reply_text(
+        "نام صاحب کارت را بفرستید (یا «رد شدن»).",
+        reply_markup=wizard_keyboard(optional=True),
+    )
+    return ASK_PAYMENT_HOLDER
+
+
+async def receive_payment_holder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return ASK_PAYMENT_HOLDER
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    holder = None if _is_skip(message.text) else message.text.strip()
+    number = context.user_data.get("payment_card_number")
+    if not number:
+        await message.reply_text("شماره کارت پیدا نشد. دوباره از تنظیمات پرداخت شروع کنید.")
+        return ConversationHandler.END
+    await set_payment_card(number=str(number), holder=holder)
+    context.user_data.clear()
+    await message.reply_text(
+        "تنظیمات پرداخت ذخیره شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await _show_panel_message(message, user_id=user.id)
+    return ConversationHandler.END
+
+
+async def receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return EDIT_VALUE
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+
+    webinar_id = context.user_data.get("edit_id")
+    field = context.user_data.get("edit_field")
+    if not isinstance(webinar_id, int) or field not in EDIT_PROMPTS:
+        await message.reply_text("ویرایش نامعتبر است. دوباره از مدیریت منو شروع کنید.")
+        return ConversationHandler.END
+
+    try:
+        if field == "title":
+            value: object = normalize_title(message.text)
+        elif field == "time":
+            value = None if _is_skip(message.text) else normalize_optional(message.text, max_len=64)
+            field = "time_text"
+        elif field == "details":
+            value = None if _is_skip(message.text) else normalize_optional(message.text, max_len=DETAILS_MAX)
+        elif field == "price":
+            value = None if _is_skip(message.text) else normalize_optional(message.text, max_len=120)
+            field = "certificate_price"
+        else:
+            value = None if _is_skip(message.text) else normalize_link(message.text)
+            field = "link"
+        webinar = await update_webinar(webinar_id, **{field: value})
+    except ValueError as exc:
+        optional = context.user_data.get("edit_field") != "title"
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=optional))
+        return EDIT_VALUE
+
+    context.user_data.clear()
+    await message.reply_text(
+        "ذخیره شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await message.reply_text(
+        _webinar_view_text(webinar),
+        reply_markup=webinar_manage_keyboard(
+            webinar.id,
+            visible=webinar.is_visible,
+            has_certificate=webinar.has_certificate,
+        ),
+    )
+    return ConversationHandler.END
+
+
+def build_conversation() -> ConversationHandler:
+    cancel_filters = filters.Regex(f"^{re.escape(BTN_CANCEL)}$") | filters.Regex(
+        f"^{re.escape(BTN_MANAGE)}$"
+    )
+    return ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(start_create, pattern=r"^admin:webinar:new$"),
+            CallbackQueryHandler(start_channel_create, pattern=r"^admin:channel:new$"),
+            CallbackQueryHandler(start_payment_edit, pattern=r"^admin:payment:edit$"),
+            CallbackQueryHandler(
+                start_edit,
+                pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|price)$",
+            ),
+        ],
+        states={
+            ASK_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_title)],
+            ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_time)],
+            ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_details)],
+            ASK_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_link)],
+            ASK_HAS_CERT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_has_cert)],
+            ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit)],
+            ASK_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_channel)],
+            ASK_CHANNEL_INVITE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_channel_invite)
+            ],
+            ASK_PAYMENT_CARD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_payment_card)
+            ],
+            ASK_PAYMENT_HOLDER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_payment_holder)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_command),
+            CommandHandler("start", cancel_and_start),
+            MessageHandler(cancel_filters, cancel_command),
+            CallbackQueryHandler(fallback_admin_callback, pattern=ADMIN_CALLBACK_PATTERN),
+        ],
+        allow_reentry=True,
+    )
+
+
+def register(application: Application) -> None:
+    application.add_handler(build_conversation())
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.Regex(f"^{re.escape(BTN_MANAGE)}$"),
+            open_manage_panel,
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(panel_callback, pattern=ADMIN_CALLBACK_PATTERN)
+    )

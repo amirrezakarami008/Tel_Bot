@@ -15,11 +15,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from bot.config import get_settings
 from bot.database.models import GiftFileClaim, SupportDirection, SupportMessage, User, WebinarLinkClaim
 from bot.database.session import get_session
-from bot.handlers.webinar import broadcast_webinar_to_all_users, mark_webinar_link_announced
+from bot.utils.buttons import BTN_STATS
+from bot.utils.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
-BTN_STATS = "📊 گزارش ربات"
 TEHRAN = ZoneInfo("Asia/Tehran")
 
 
@@ -135,6 +135,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             or 0
         )
 
+    user = update.effective_user
     await message.reply_text(
         "📊 گزارش ربات\n\n"
         "👥 کاربران\n"
@@ -157,7 +158,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "💬 پشتیبانی\n"
         f"• منتظر پاسخ شما: {open_count} گفتگو\n"
         f"• تا حالا پیام پشتیبانی فرستاده‌اند: {support_users} نفر\n"
-        f"• پیام‌های پشتیبانی امروز: {support_today}"
+        f"• پیام‌های پشتیبانی امروز: {support_today}",
+        reply_markup=await main_menu_keyboard(user.id if user else None),
     )
 
 
@@ -192,26 +194,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def send_webinar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send the full webinar message (with WEBINAR_LINK from env) to all users."""
+    del context
     message = update.effective_message
+    user = update.effective_user
     if message is None:
         return
     if not _is_admin(update):
         await message.reply_text("شما دسترسی ادمین ندارید.")
         return
 
-    settings = get_settings()
-    if not settings.webinar_link:
-        await message.reply_text(
-            "WEBINAR_LINK در .env خالی است.\n"
-            "لینک را در .env بگذارید، ربات را ری‌استارت کنید، دوباره /send_webinar بزنید."
-        )
-        return
-
-    await message.reply_text("در حال ارسال لینک وبینار به همه کاربران…")
-    sent, failed = await broadcast_webinar_to_all_users(context.bot)
-    await mark_webinar_link_announced(settings.webinar_link)
-    await message.reply_text(f"ارسال لینک وبینار تمام شد.\nموفق: {sent}\nناموفق: {failed}")
+    await message.reply_text(
+        "برای ارسال وبینار، از دکمه «⚙️ مدیریت منو» وبینار را باز کنید "
+        "و «ارسال به همه کاربران» را بزنید.",
+        reply_markup=await main_menu_keyboard(user.id if user else None),
+    )
 
 
 def register(application: Application) -> None:
