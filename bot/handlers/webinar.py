@@ -264,6 +264,19 @@ async def _start_registration_flow(
     )
 
 
+async def handle_webinar_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route private text for webinar name or certificate-info steps.
+
+    Must be a single group-1 handler: PTB runs only the first matching handler per group.
+    """
+    if context.user_data.get(AWAITING_CERT_INFO_KEY):
+        await handle_cert_info_input(update, context)
+        return
+    if context.user_data.get(AWAITING_NAME_KEY):
+        await handle_webinar_name_input(update, context)
+        return
+
+
 async def handle_webinar_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     webinar_id = context.user_data.get(AWAITING_NAME_KEY)
     if not webinar_id:
@@ -822,16 +835,7 @@ def register(application: Application) -> None:
             filters.ChatType.PRIVATE
             & filters.TEXT
             & ~filters.COMMAND,
-            handle_webinar_name_input,
-        ),
-        group=1,
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE
-            & filters.TEXT
-            & ~filters.COMMAND,
-            handle_cert_info_input,
+            handle_webinar_text_input,
         ),
         group=1,
     )

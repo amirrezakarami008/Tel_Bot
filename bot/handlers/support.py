@@ -11,6 +11,7 @@ from telegram.constants import ChatType
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
@@ -285,6 +286,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
     await message.reply_text("پاسخ برای کاربر ارسال شد.")
+    raise ApplicationHandlerStop
 
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -302,7 +304,7 @@ def register(application: Application) -> None:
             filters.ChatType.PRIVATE & filters.REPLY & ~filters.COMMAND,
             handle_admin_reply,
         ),
-        group=1,
+        group=-1,
     )
 
     application.add_handler(
