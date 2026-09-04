@@ -190,7 +190,8 @@ def registration_list_keyboard(webinar_id: int, registrations: list) -> InlineKe
     for reg in registrations[:30]:
         user = getattr(reg, "user", None)
         name = (
-            getattr(reg, "registrant_name", None)
+            getattr(reg, "name_fa", None)
+            or getattr(reg, "registrant_name", None)
             or (user.full_name if user else None)
             or f"#{reg.id}"
         )

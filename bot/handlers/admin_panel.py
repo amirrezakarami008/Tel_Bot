@@ -797,7 +797,7 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data.setdefault("draft", {})["link"] = link
     await message.reply_text(
         "لینک گروه وبینار را بفرستید (با https://).\n"
-        "این لینک بلافاصله بعد از وارد کردن نام به کاربر داده می‌شود.\n"
+        "این لینک در آخرین مرحله ثبت‌نام (با مدرک یا بدون مدرک) به کاربر داده می‌شود.\n"
         "اگر هنوز آماده نیست «رد شدن» را بزنید.",
         reply_markup=wizard_keyboard(optional=True),
     )

@@ -34,7 +34,7 @@ async def set_payment_card(*, number: str, holder: str | None) -> None:
 def format_payment_instructions(*, price: str | None, card_number: str, card_holder: str | None) -> str:
     lines = [
         "برای دریافت مدرک، مبلغ را به کارت زیر واریز کنید.",
-        "سپس عکس/فایل فیش را همراه اطلاعات خودتان (نام و توضیحات لازم) همین‌جا بفرستید.",
+        "سپس فقط عکس یا فایل فیش واریز را همین‌جا بفرستید.",
         "",
     ]
     if price:
@@ -45,8 +45,7 @@ def format_payment_instructions(*, price: str | None, card_number: str, card_hol
     lines.extend(
         [
             "",
-            "نکته: می‌توانید اطلاعات را در کپشن همان فیش بنویسید.",
-            "بعد از ارسال، منتظر تایید ادمین بمانید.",
+            "بعد از دریافت فیش، اطلاعات لازم برای صدور مدرک از شما پرسیده می‌شود.",
         ]
     )
     return "\n".join(lines)

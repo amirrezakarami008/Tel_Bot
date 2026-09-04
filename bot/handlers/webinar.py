@@ -48,6 +48,17 @@ logger = logging.getLogger(__name__)
 VERIFY_PREFIX = "check_membership:webinar:"
 AWAITING_RECEIPT_KEY = "awaiting_receipt_webinar_id"
 AWAITING_NAME_KEY = "awaiting_webinar_name_id"
+AWAITING_CERT_INFO_KEY = "awaiting_cert_info_webinar_id"
+CERT_INFO_STEP_KEY = "cert_info_step"
+CERT_INFO_DRAFT_KEY = "cert_info_draft"
+
+CERT_INFO_STEPS = ("name_fa", "name_en", "national_id", "phone")
+CERT_INFO_PROMPTS = {
+    "name_fa": "نام و نام‌خانوادگی به فارسی را وارد کنید:",
+    "name_en": "نام و نام‌خانوادگی به انگلیسی را وارد کنید:",
+    "national_id": "کد ملی را وارد کنید (۱۰ رقم):",
+    "phone": "شماره تماس را وارد کنید (مثلاً 09121234567):",
+}
 
 GATE_TEXT = (
     "برای ثبت‌نام در وبینار، ابتدا در کانال‌های زیر عضو شوید "
@@ -143,23 +154,22 @@ async def _thanks_without_cert_message(webinar) -> str:
     )
 
 
-async def _send_group_and_continue(
+async def _send_group_link_if_any(message, webinar) -> None:
+    if not webinar.group_link:
+        return
+    await message.reply_text(
+        f"لینک گروه وبینار «{webinar.title}»:\n{webinar.group_link}\n\n"
+        "لطفاً وارد گروه شوید."
+    )
+
+
+async def _continue_after_name(
     message,
     context: ContextTypes.DEFAULT_TYPE,
     *,
     user,
     webinar,
 ) -> None:
-    if webinar.group_link:
-        await message.reply_text(
-            f"لینک گروه وبینار «{webinar.title}»:\n{webinar.group_link}\n\n"
-            "لطفاً وارد گروه شوید."
-        )
-    else:
-        await message.reply_text(
-            "لینک گروه هنوز برای این وبینار تنظیم نشده است. ادامه ثبت‌نام را انجام دهید."
-        )
-
     if webinar.has_certificate:
         await message.reply_text(
             "مایل به ثبت‌نام برای دریافت مدرک هستید؟",
@@ -178,6 +188,7 @@ async def _send_group_and_continue(
         await _thanks_without_cert_message(webinar),
         reply_markup=await main_menu_keyboard(user.id),
     )
+    await _send_group_link_if_any(message, webinar)
 
 
 async def _start_registration_flow(
@@ -223,8 +234,17 @@ async def _start_registration_flow(
     if existing and existing.status == RegistrationStatus.PENDING_PAYMENT.value:
         if existing.registrant_name:
             context.user_data["webinar_registrant_name"] = existing.registrant_name
-        if webinar.group_link:
-            await message.reply_text(f"لینک گروه:\n{webinar.group_link}")
+        # Resume certificate info form if user already sent receipt.
+        if (
+            context.user_data.get(AWAITING_CERT_INFO_KEY) == webinar_id
+            and context.user_data.get(CERT_INFO_DRAFT_KEY)
+        ):
+            step = context.user_data.get(CERT_INFO_STEP_KEY) or "name_fa"
+            await message.reply_text(
+                "لطفاً اطلاعات مدرک را کامل کنید.\n"
+                f"{CERT_INFO_PROMPTS.get(step, CERT_INFO_PROMPTS['name_fa'])}"
+            )
+            return
         await _prompt_payment(message, context, webinar)
         return
     if existing and existing.status == RegistrationStatus.REJECTED.value:
@@ -275,7 +295,7 @@ async def handle_webinar_name_input(update: Update, context: ContextTypes.DEFAUL
 
     context.user_data.pop(AWAITING_NAME_KEY, None)
     context.user_data["webinar_registrant_name"] = text[:255]
-    await _send_group_and_continue(message, context, user=user, webinar=webinar)
+    await _continue_after_name(message, context, user=user, webinar=webinar)
     raise ApplicationHandlerStop
 
 
@@ -287,6 +307,9 @@ async def _prompt_payment(message, context: ContextTypes.DEFAULT_TYPE, webinar) 
             reply_markup=await main_menu_keyboard(message.chat_id),
         )
         return
+    context.user_data.pop(AWAITING_CERT_INFO_KEY, None)
+    context.user_data.pop(CERT_INFO_STEP_KEY, None)
+    context.user_data.pop(CERT_INFO_DRAFT_KEY, None)
     context.user_data[AWAITING_RECEIPT_KEY] = webinar.id
     text = format_payment_instructions(
         price=webinar.certificate_price,
@@ -433,6 +456,7 @@ async def registration_choice_callback(update: Update, context: ContextTypes.DEF
             await _thanks_without_cert_message(webinar),
             reply_markup=await main_menu_keyboard(user.id),
         )
+        await _send_group_link_if_any(query.message, webinar)
         return
 
     if not webinar.has_certificate:
@@ -477,34 +501,79 @@ async def handle_receipt_upload(update: Update, context: ContextTypes.DEFAULT_TY
         await message.reply_text("وبینار پیدا نشد.")
         raise ApplicationHandlerStop
 
-    info_text = (message.caption or "").strip() or None
-    registrant_name = context.user_data.get("webinar_registrant_name")
-    reg = await upsert_registration(
-        user,
-        webinar_id=webinar.id,
-        kind=RegistrationKind.CERTIFICATE.value,
-        status=RegistrationStatus.PENDING_REVIEW.value,
-        receipt_file_id=file_id,
-        receipt_file_type=file_type,
-        registrant_name=registrant_name,
-        info_text=info_text,
-    )
     context.user_data.pop(AWAITING_RECEIPT_KEY, None)
-    reg = await get_registration_by_id(reg.id) or reg
+    context.user_data[AWAITING_CERT_INFO_KEY] = webinar.id
+    context.user_data[CERT_INFO_STEP_KEY] = "name_fa"
+    context.user_data[CERT_INFO_DRAFT_KEY] = {
+        "receipt_file_id": file_id,
+        "receipt_file_type": file_type,
+    }
 
     await message.reply_text(
-        "فیش و اطلاعات شما دریافت شد و برای بررسی ادمین ارسال شد.\n"
-        "پس از تایید، ثبت‌نام با مدرک قطعی می‌شود.",
-        reply_markup=await main_menu_keyboard(user.id),
+        "فیش دریافت شد.\n\n"
+        "حالا اطلاعات لازم برای صدور مدرک را وارد کنید.\n"
+        f"{CERT_INFO_PROMPTS['name_fa']}"
     )
+    raise ApplicationHandlerStop
 
+
+def _normalize_phone(text: str) -> str | None:
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if digits.startswith("98") and len(digits) == 12:
+        digits = "0" + digits[2:]
+    if len(digits) == 10 and digits.startswith("9"):
+        digits = "0" + digits
+    if len(digits) == 11 and digits.startswith("09"):
+        return digits
+    return None
+
+
+def _validate_cert_info_step(step: str, text: str) -> tuple[str | None, str | None]:
+    value = " ".join(text.strip().split())
+    if step == "name_fa":
+        if len(value) < 3:
+            return None, "نام فارسی معتبر وارد کنید."
+        return value[:255], None
+    if step == "name_en":
+        if len(value) < 3:
+            return None, "نام انگلیسی معتبر وارد کنید."
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -'.")
+        if any(ch not in allowed for ch in value):
+            return None, "نام انگلیسی فقط با حروف لاتین وارد شود."
+        return value[:255], None
+    if step == "national_id":
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) != 10:
+            return None, "کد ملی باید ۱۰ رقم باشد."
+        return digits, None
+    if step == "phone":
+        phone = _normalize_phone(value)
+        if phone is None:
+            return None, "شماره تماس معتبر نیست. مثلاً 09121234567"
+        return phone, None
+    return None, "مرحله نامعتبر است."
+
+
+async def _notify_admins_receipt(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    reg,
+    webinar,
+) -> None:
     settings = get_settings()
+    file_id = reg.receipt_file_id
+    file_type = reg.receipt_file_type
+    if not file_id:
+        return
     caption = (
         "🧾 رسید پرداخت وبینار\n\n"
         f"{registration_summary(reg)}\n"
         f"وبینار: {webinar.title}\n"
         f"مبلغ: {webinar.certificate_price or '—'}"
     )
+    # Telegram caption max ~1024; keep summary compact enough in practice
+    if len(caption) > 1000:
+        caption = caption[:997] + "..."
     for admin_id in settings.admin_ids:
         try:
             if file_type == "photo":
@@ -524,6 +593,75 @@ async def handle_receipt_upload(update: Update, context: ContextTypes.DEFAULT_TY
         except TelegramError as exc:
             logger.error("Failed to notify admin %s about receipt: %s", admin_id, exc)
 
+
+async def handle_cert_info_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    webinar_id = context.user_data.get(AWAITING_CERT_INFO_KEY)
+    if not webinar_id:
+        return
+
+    message = update.message
+    user = update.effective_user
+    if message is None or user is None or not message.text:
+        return
+
+    from bot.utils.buttons import BTN_GIFT, BTN_MANAGE, BTN_STATS, BTN_SUPPORT
+
+    text = message.text.strip()
+    if text in {BTN_GIFT, BTN_SUPPORT, BTN_STATS, BTN_MANAGE} or text.startswith("🔗 "):
+        return
+
+    step = context.user_data.get(CERT_INFO_STEP_KEY) or "name_fa"
+    draft = context.user_data.setdefault(CERT_INFO_DRAFT_KEY, {})
+    value, error = _validate_cert_info_step(step, text)
+    if error or value is None:
+        await message.reply_text(error or "مقدار نامعتبر است.")
+        raise ApplicationHandlerStop
+
+    draft[step] = value
+    try:
+        idx = CERT_INFO_STEPS.index(step)
+    except ValueError:
+        idx = 0
+
+    if idx + 1 < len(CERT_INFO_STEPS):
+        next_step = CERT_INFO_STEPS[idx + 1]
+        context.user_data[CERT_INFO_STEP_KEY] = next_step
+        await message.reply_text(CERT_INFO_PROMPTS[next_step])
+        raise ApplicationHandlerStop
+
+    webinar = await get_webinar(int(webinar_id))
+    if webinar is None:
+        context.user_data.pop(AWAITING_CERT_INFO_KEY, None)
+        context.user_data.pop(CERT_INFO_STEP_KEY, None)
+        context.user_data.pop(CERT_INFO_DRAFT_KEY, None)
+        await message.reply_text("وبینار پیدا نشد.")
+        raise ApplicationHandlerStop
+
+    reg = await upsert_registration(
+        user,
+        webinar_id=webinar.id,
+        kind=RegistrationKind.CERTIFICATE.value,
+        status=RegistrationStatus.PENDING_REVIEW.value,
+        registrant_name=draft.get("name_fa") or context.user_data.get("webinar_registrant_name"),
+        name_fa=draft.get("name_fa"),
+        name_en=draft.get("name_en"),
+        national_id=draft.get("national_id"),
+        phone=draft.get("phone"),
+        receipt_file_id=draft.get("receipt_file_id"),
+        receipt_file_type=draft.get("receipt_file_type"),
+    )
+    context.user_data.pop(AWAITING_CERT_INFO_KEY, None)
+    context.user_data.pop(CERT_INFO_STEP_KEY, None)
+    context.user_data.pop(CERT_INFO_DRAFT_KEY, None)
+
+    reg = await get_registration_by_id(reg.id) or reg
+    await message.reply_text(
+        "اطلاعات و فیش شما دریافت شد و برای بررسی ادمین ارسال شد.\n"
+        "پس از تایید، ثبت‌نام با مدرک قطعی می‌شود.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await _send_group_link_if_any(message, webinar)
+    await _notify_admins_receipt(context, reg=reg, webinar=webinar)
     raise ApplicationHandlerStop
 
 
@@ -685,6 +823,15 @@ def register(application: Application) -> None:
             & filters.TEXT
             & ~filters.COMMAND,
             handle_webinar_name_input,
+        ),
+        group=1,
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE
+            & filters.TEXT
+            & ~filters.COMMAND,
+            handle_cert_info_input,
         ),
         group=1,
     )

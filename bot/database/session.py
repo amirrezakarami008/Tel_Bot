@@ -109,6 +109,10 @@ def _migrate_schema(connection) -> None:
         reg_cols = {col["name"] for col in inspector.get_columns("webinar_registrations")}
         reg_alters = {
             "registrant_name": "ALTER TABLE webinar_registrations ADD COLUMN registrant_name VARCHAR(255)",
+            "name_fa": "ALTER TABLE webinar_registrations ADD COLUMN name_fa VARCHAR(255)",
+            "name_en": "ALTER TABLE webinar_registrations ADD COLUMN name_en VARCHAR(255)",
+            "national_id": "ALTER TABLE webinar_registrations ADD COLUMN national_id VARCHAR(20)",
+            "phone": "ALTER TABLE webinar_registrations ADD COLUMN phone VARCHAR(32)",
             "info_text": "ALTER TABLE webinar_registrations ADD COLUMN info_text TEXT",
         }
         for col, sql in reg_alters.items():
