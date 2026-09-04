@@ -109,6 +109,7 @@ async def create_webinar(
     is_visible: bool = True,
     has_certificate: bool = False,
     certificate_price: str | None = None,
+    group_link: str | None = None,
     link_send_at=None,
 ) -> Webinar:
     async with get_session() as session:
@@ -120,6 +121,7 @@ async def create_webinar(
             is_visible=is_visible,
             has_certificate=has_certificate,
             certificate_price=certificate_price,
+            group_link=group_link,
             link_send_at=link_send_at,
         )
         session.add(webinar)

@@ -60,6 +60,8 @@ async def upsert_registration(
     webinar_id: int,
     kind: str,
     status: str,
+    registrant_name: str | None = None,
+    info_text: str | None = None,
     receipt_file_id: str | None = None,
     receipt_file_type: str | None = None,
 ) -> WebinarRegistration:
@@ -78,6 +80,8 @@ async def upsert_registration(
                 webinar_id=webinar_id,
                 kind=kind,
                 status=status,
+                registrant_name=registrant_name,
+                info_text=info_text,
                 receipt_file_id=receipt_file_id,
                 receipt_file_type=receipt_file_type,
             )
@@ -85,6 +89,10 @@ async def upsert_registration(
         else:
             reg.kind = kind
             reg.status = status
+            if registrant_name is not None:
+                reg.registrant_name = registrant_name
+            if info_text is not None:
+                reg.info_text = info_text
             if receipt_file_id is not None:
                 reg.receipt_file_id = receipt_file_id
             if receipt_file_type is not None:
@@ -94,6 +102,7 @@ async def upsert_registration(
             if status == RegistrationStatus.PENDING_PAYMENT.value:
                 reg.receipt_file_id = None
                 reg.receipt_file_type = None
+                reg.info_text = None
                 reg.admin_note = None
                 reg.reviewed_at = None
                 reg.reviewed_by_admin_id = None
@@ -156,12 +165,15 @@ async def list_approved_telegram_ids(webinar_id: int) -> list[int]:
 
 def registration_summary(reg: WebinarRegistration) -> str:
     user = reg.user
-    name = (user.full_name if user else None) or "—"
+    name = reg.registrant_name or (user.full_name if user else None) or "—"
     username = f"@{user.username}" if user and user.username else "—"
     tg_id = user.telegram_id if user else "—"
-    return (
-        f"#{reg.id} | {name} ({username})\n"
-        f"ID: {tg_id}\n"
-        f"نوع: {KIND_LABELS.get(reg.kind, reg.kind)}\n"
-        f"وضعیت: {STATUS_LABELS.get(reg.status, reg.status)}"
-    )
+    lines = [
+        f"#{reg.id} | {name} ({username})",
+        f"ID: {tg_id}",
+        f"نوع: {KIND_LABELS.get(reg.kind, reg.kind)}",
+        f"وضعیت: {STATUS_LABELS.get(reg.status, reg.status)}",
+    ]
+    if reg.info_text:
+        lines.append(f"اطلاعات همراه رسید: {reg.info_text}")
+    return "\n".join(lines)

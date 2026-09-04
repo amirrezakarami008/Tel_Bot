@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from sqlalchemy import select
 from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
-from bot.config import get_settings
 from bot.database.models import GiftFileClaim
 from bot.database.session import get_session
 from bot.handlers.membership import handle_membership_check, require_membership_or_prompt
 from bot.utils.features import FEATURE_GIFT, is_feature_enabled
+from bot.utils.gifts import list_gift_files
 from bot.utils.keyboards import main_menu_keyboard
 from bot.utils.users import get_or_create_user
 
@@ -25,18 +24,6 @@ GATE_TEXT = (
     "برای دریافت فایل‌های هدیه، ابتدا در کانال‌های زیر عضو شوید "
     "و سپس روی دکمه «عضو شدم، بررسی کن» بزنید."
 )
-
-
-def list_gift_files() -> list[Path]:
-    directory = Path(get_settings().gift_files_dir)
-    if not directory.exists() or not directory.is_dir():
-        logger.warning("Gift files directory missing: %s", directory)
-        return []
-    return sorted(
-        path
-        for path in directory.iterdir()
-        if path.is_file() and not path.name.startswith(".")
-    )
 
 
 async def _deliver_gifts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -148,6 +148,12 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         return
 
+    # Webinar registration flow owns these messages.
+    if context.user_data.get("awaiting_webinar_name_id") or context.user_data.get(
+        "awaiting_receipt_webinar_id"
+    ):
+        return
+
     if not await is_feature_enabled(FEATURE_SUPPORT):
         await message.reply_text(
             "پشتیبانی فعلاً فعال نیست.",

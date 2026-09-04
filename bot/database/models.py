@@ -75,6 +75,7 @@ class Webinar(Base):
         Boolean, nullable=False, default=False, server_default="false"
     )
     certificate_price: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    group_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     link_send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     link_auto_sent: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -122,6 +123,8 @@ class WebinarRegistration(Base):
     )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    registrant_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    info_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     receipt_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     receipt_file_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -90,6 +90,7 @@ async def admin_panel_keyboard() -> InlineKeyboardMarkup:
             )
         ],
         [InlineKeyboardButton("💳 تنظیمات پرداخت (کارت)", callback_data="admin:payment")],
+        [InlineKeyboardButton("🎁 مدیریت فایل‌های هدیه", callback_data="admin:gifts")],
         [InlineKeyboardButton("➕ افزودن کانال اجباری", callback_data="admin:channel:new")],
     ]
     for channel in channels:
@@ -124,6 +125,32 @@ def channel_manage_keyboard(channel_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def gift_files_keyboard() -> InlineKeyboardMarkup:
+    from bot.utils.gifts import list_gift_files
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("➕ آپلود فایل هدیه", callback_data="admin:gifts:upload")],
+    ]
+    for index, path in enumerate(list_gift_files()):
+        name = path.name
+        if len(name) > 35:
+            name = name[:32] + "..."
+        rows.append(
+            [InlineKeyboardButton(f"📄 {name}", callback_data=f"admin:gifts:file:{index}")]
+        )
+    rows.append([InlineKeyboardButton("« بازگشت", callback_data="admin:panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def gift_file_manage_keyboard(index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🗑 حذف فایل", callback_data=f"admin:gifts:delete:{index}")],
+            [InlineKeyboardButton("« بازگشت", callback_data="admin:gifts")],
+        ]
+    )
+
+
 def webinar_manage_keyboard(webinar_id: int, *, visible: bool, has_certificate: bool) -> InlineKeyboardMarkup:
     visibility = "🙈 مخفی کردن دکمه" if visible else "👁 نمایش دکمه در منو"
     cert = "🎓 مدرک: دارد" if has_certificate else "🎓 مدرک: ندارد"
@@ -134,7 +161,10 @@ def webinar_manage_keyboard(webinar_id: int, *, visible: bool, has_certificate: 
                 InlineKeyboardButton("⏰ ساعت", callback_data=f"admin:webinar:edit:{webinar_id}:time"),
             ],
             [
-                InlineKeyboardButton("🔗 لینک", callback_data=f"admin:webinar:edit:{webinar_id}:link"),
+                InlineKeyboardButton("🔗 لینک ورود", callback_data=f"admin:webinar:edit:{webinar_id}:link"),
+                InlineKeyboardButton("👥 لینک گروه", callback_data=f"admin:webinar:edit:{webinar_id}:group"),
+            ],
+            [
                 InlineKeyboardButton("📝 جزئیات", callback_data=f"admin:webinar:edit:{webinar_id}:details"),
             ],
             [
@@ -159,7 +189,11 @@ def registration_list_keyboard(webinar_id: int, registrations: list) -> InlineKe
     rows: list[list[InlineKeyboardButton]] = []
     for reg in registrations[:30]:
         user = getattr(reg, "user", None)
-        name = (user.full_name if user else None) or f"#{reg.id}"
+        name = (
+            getattr(reg, "registrant_name", None)
+            or (user.full_name if user else None)
+            or f"#{reg.id}"
+        )
         if len(name) > 28:
             name = name[:25] + "..."
         mark = {

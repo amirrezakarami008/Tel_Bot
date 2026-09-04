@@ -97,11 +97,22 @@ def _migrate_schema(connection) -> None:
         alters = {
             "has_certificate": "ALTER TABLE webinars ADD COLUMN has_certificate BOOLEAN NOT NULL DEFAULT false",
             "certificate_price": "ALTER TABLE webinars ADD COLUMN certificate_price VARCHAR(120)",
+            "group_link": "ALTER TABLE webinars ADD COLUMN group_link TEXT",
             "link_send_at": "ALTER TABLE webinars ADD COLUMN link_send_at TIMESTAMPTZ",
             "link_auto_sent": "ALTER TABLE webinars ADD COLUMN link_auto_sent BOOLEAN NOT NULL DEFAULT false",
         }
         for col, sql in alters.items():
             if col not in webinar_cols:
+                connection.execute(text(sql))
+
+    if "webinar_registrations" in tables:
+        reg_cols = {col["name"] for col in inspector.get_columns("webinar_registrations")}
+        reg_alters = {
+            "registrant_name": "ALTER TABLE webinar_registrations ADD COLUMN registrant_name VARCHAR(255)",
+            "info_text": "ALTER TABLE webinar_registrations ADD COLUMN info_text TEXT",
+        }
+        for col, sql in reg_alters.items():
+            if col not in reg_cols:
                 connection.execute(text(sql))
 
     if "webinar_link_claims" not in tables:

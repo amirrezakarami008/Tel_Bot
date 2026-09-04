@@ -32,10 +32,18 @@ from bot.utils.keyboards import (
     admin_panel_keyboard,
     channel_manage_keyboard,
     confirm_keyboard,
+    gift_file_manage_keyboard,
+    gift_files_keyboard,
     main_menu_keyboard,
     registration_list_keyboard,
     webinar_manage_keyboard,
     wizard_keyboard,
+)
+from bot.utils.gifts import (
+    delete_gift_file,
+    get_gift_file_by_index,
+    list_gift_files,
+    save_telegram_document,
 )
 from bot.utils.payment import get_payment_card, set_payment_card
 from bot.utils.registrations import (
@@ -63,6 +71,7 @@ logger = logging.getLogger(__name__)
     ASK_TIME,
     ASK_DETAILS,
     ASK_LINK,
+    ASK_GROUP_LINK,
     EDIT_VALUE,
     ASK_CHANNEL,
     ASK_CHANNEL_INVITE,
@@ -70,17 +79,19 @@ logger = logging.getLogger(__name__)
     ASK_PRICE,
     ASK_PAYMENT_CARD,
     ASK_PAYMENT_HOLDER,
-) = range(11)
+    ASK_GIFT_FILE,
+) = range(13)
 
 PANEL_TEXT = (
     "⚙️ مدیریت منو\n\n"
     "• دکمه‌ها و کانال‌های اجباری\n"
     "• وبینار + مدرک/پرداخت\n"
+    "• فایل‌های هدیه (آپلود/حذف)\n"
     "• کارت بانکی برای واریز مدرک"
 )
 
 ADMIN_CALLBACK_PATTERN = (
-    r"^admin:(panel|payment|toggle:|channel:(view|delete|delete_yes):|"
+    r"^admin:(panel|payment|gifts|toggle:|channel:(view|delete|delete_yes):|"
     r"webinar:(view|toggle|cert|regs|reg|send|send_yes|delete|delete_yes):)"
 )
 
@@ -89,6 +100,7 @@ EDIT_PROMPTS = {
     "time": "ساعت برگزاری را بفرستید (مثلاً 21:00).\nبرای خالی ماندن «رد شدن» را بزنید.",
     "details": "جزئیات وبینار را بفرستید.\nبرای خالی ماندن «رد شدن» را بزنید.",
     "link": "لینک ورود را بفرستید (با https://).\nبرای خالی ماندن «رد شدن» را بزنید.",
+    "group": "لینک گروه وبینار را بفرستید (با https://).\nبرای خالی ماندن «رد شدن» را بزنید.",
     "price": "مبلغ مدرک را بفرستید (مثلاً ۱۵۰٬۰۰۰ تومان).\nبرای خالی ماندن «رد شدن» را بزنید.",
 }
 
@@ -116,7 +128,8 @@ def _webinar_view_text(webinar) -> str:
         f"📺 {webinar.title}\n\n"
         f"نام: {webinar.title}\n"
         f"ساعت: {webinar.time_text or '—'}\n"
-        f"لینک: {webinar.link or 'ثبت نشده'}\n"
+        f"لینک ورود: {webinar.link or 'ثبت نشده'}\n"
+        f"لینک گروه: {webinar.group_link or 'ثبت نشده'}\n"
         f"جزئیات: {webinar.details or '—'}\n"
         f"مدرک: {cert}\n"
         f"مبلغ مدرک: {price}\n"
@@ -185,6 +198,78 @@ async def _edit_channel_view(query, channel) -> None:
     )
 
 
+async def _show_gifts_panel(query) -> None:
+    files = list_gift_files()
+    await query.edit_message_text(
+        "🎁 مدیریت فایل‌های هدیه\n\n"
+        f"تعداد فایل‌ها: {len(files)}\n"
+        "می‌توانید فایل جدید آپلود کنید یا فایل موجود را حذف کنید.",
+        reply_markup=gift_files_keyboard(),
+    )
+
+
+async def _handle_gifts_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    data: str,
+) -> None:
+    del context
+    query = update.callback_query
+    if query is None:
+        return
+
+    if data == "admin:gifts":
+        await _show_gifts_panel(query)
+        return
+
+    if data == "admin:gifts:upload":
+        # Handled by ConversationHandler entry; ignore if reached here.
+        return
+
+    if data.startswith("admin:gifts:file:"):
+        index = int(data.rsplit(":", 1)[-1])
+        path = get_gift_file_by_index(index)
+        if path is None:
+            await _show_gifts_panel(query)
+            return
+        size_kb = max(1, path.stat().st_size // 1024)
+        await query.edit_message_text(
+            f"📄 {path.name}\nحجم تقریبی: {size_kb} KB",
+            reply_markup=gift_file_manage_keyboard(index),
+        )
+        return
+
+    if data.startswith("admin:gifts:delete:") and not data.startswith("admin:gifts:delete_yes:"):
+        index = int(data.rsplit(":", 1)[-1])
+        path = get_gift_file_by_index(index)
+        if path is None:
+            await _show_gifts_panel(query)
+            return
+        await query.edit_message_text(
+            f"فایل «{path.name}» حذف شود؟",
+            reply_markup=confirm_keyboard(
+                f"admin:gifts:delete_yes:{index}",
+                f"admin:gifts:file:{index}",
+            ),
+        )
+        return
+
+    if data.startswith("admin:gifts:delete_yes:"):
+        index = int(data.rsplit(":", 1)[-1])
+        path = get_gift_file_by_index(index)
+        if path is None:
+            await _show_gifts_panel(query)
+            return
+        name = path.name
+        if delete_gift_file(path):
+            if query.message:
+                await query.message.reply_text(f"فایل «{name}» حذف شد.")
+        else:
+            if query.message:
+                await query.message.reply_text("حذف فایل ناموفق بود.")
+        await _show_gifts_panel(query)
+
+
 async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.data is None or update.effective_user is None:
@@ -214,6 +299,10 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ]
             ),
         )
+        return
+
+    if data == "admin:gifts" or data.startswith("admin:gifts:"):
+        await _handle_gifts_callback(update, context, data)
         return
 
     if data.startswith("admin:toggle:"):
@@ -707,6 +796,30 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     context.user_data.setdefault("draft", {})["link"] = link
     await message.reply_text(
+        "لینک گروه وبینار را بفرستید (با https://).\n"
+        "این لینک بلافاصله بعد از وارد کردن نام به کاربر داده می‌شود.\n"
+        "اگر هنوز آماده نیست «رد شدن» را بزنید.",
+        reply_markup=wizard_keyboard(optional=True),
+    )
+    return ASK_GROUP_LINK
+
+
+async def receive_group_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return ASK_GROUP_LINK
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+    try:
+        group_link = None if _is_skip(message.text) else normalize_link(message.text)
+    except ValueError as exc:
+        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        return ASK_GROUP_LINK
+
+    context.user_data.setdefault("draft", {})["group_link"] = group_link
+    await message.reply_text(
         "آیا این وبینار گزینه «با مدرک» دارد؟",
         reply_markup=ReplyKeyboardMarkup(
             [[BTN_CERT_YES], [BTN_CERT_NO], [BTN_CANCEL]],
@@ -779,6 +892,7 @@ async def _finish_webinar_create(update: Update, context: ContextTypes.DEFAULT_T
             is_visible=True,
             has_certificate=bool(draft.get("has_certificate")),
             certificate_price=draft.get("certificate_price"),
+            group_link=draft.get("group_link"),
         )
     except KeyError:
         await message.reply_text("ثبت وبینار ناموفق بود. دوباره از مدیریت منو شروع کنید.")
@@ -820,6 +934,75 @@ async def start_payment_edit(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=wizard_keyboard(optional=False),
     )
     return ASK_PAYMENT_CARD
+
+
+async def start_gift_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    context.user_data.clear()
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "فایل هدیه را به‌صورت Document (مثلاً PDF) همین‌جا بفرستید.\n"
+        "برای انصراف «انصراف» را بزنید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_GIFT_FILE
+
+
+async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None:
+        return ASK_GIFT_FILE
+
+    if message.text:
+        left = await _maybe_leave_wizard(update, context)
+        if left is not None:
+            return left
+        await message.reply_text(
+            "لطفاً خود فایل را ارسال کنید (نه متن).",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_GIFT_FILE
+
+    document = message.document
+    if document is None:
+        await message.reply_text(
+            "فقط فایل Document پشتیبانی می‌شود (مثلاً PDF).",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_GIFT_FILE
+
+    filename = document.file_name or f"gift_{document.file_unique_id}.bin"
+    try:
+        saved = await save_telegram_document(
+            context.bot,
+            file_id=document.file_id,
+            filename=filename,
+        )
+    except Exception as exc:
+        logger.exception("Gift upload failed")
+        await message.reply_text(
+            f"آپلود ناموفق بود.\n{exc}",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_GIFT_FILE
+
+    context.user_data.clear()
+    await message.reply_text(
+        f"فایل «{saved.name}» به فایل‌های هدیه اضافه شد.",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    await message.reply_text(
+        "🎁 مدیریت فایل‌های هدیه\n\n"
+        f"تعداد فایل‌ها: {len(list_gift_files())}",
+        reply_markup=gift_files_keyboard(),
+    )
+    return ConversationHandler.END
 
 
 async def receive_payment_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -893,6 +1076,9 @@ async def receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         elif field == "price":
             value = None if _is_skip(message.text) else normalize_optional(message.text, max_len=120)
             field = "certificate_price"
+        elif field == "group":
+            value = None if _is_skip(message.text) else normalize_link(message.text)
+            field = "group_link"
         else:
             value = None if _is_skip(message.text) else normalize_link(message.text)
             field = "link"
@@ -927,9 +1113,10 @@ def build_conversation() -> ConversationHandler:
             CallbackQueryHandler(start_create, pattern=r"^admin:webinar:new$"),
             CallbackQueryHandler(start_channel_create, pattern=r"^admin:channel:new$"),
             CallbackQueryHandler(start_payment_edit, pattern=r"^admin:payment:edit$"),
+            CallbackQueryHandler(start_gift_upload, pattern=r"^admin:gifts:upload$"),
             CallbackQueryHandler(
                 start_edit,
-                pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|price)$",
+                pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|group|price)$",
             ),
         ],
         states={
@@ -937,6 +1124,9 @@ def build_conversation() -> ConversationHandler:
             ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_time)],
             ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_details)],
             ASK_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_link)],
+            ASK_GROUP_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_link)
+            ],
             ASK_HAS_CERT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_has_cert)],
             ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
             EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_edit)],
@@ -949,6 +1139,10 @@ def build_conversation() -> ConversationHandler:
             ],
             ASK_PAYMENT_HOLDER: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_payment_holder)
+            ],
+            ASK_GIFT_FILE: [
+                MessageHandler(filters.Document.ALL & ~filters.COMMAND, receive_gift_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_gift_file),
             ],
         },
         fallbacks=[
