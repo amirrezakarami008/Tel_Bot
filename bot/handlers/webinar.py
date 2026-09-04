@@ -390,7 +390,35 @@ async def registration_choice_callback(update: Update, context: ContextTypes.DEF
         await query.answer("وبینار در دسترس نیست.", show_alert=True)
         return
 
+    async with get_session() as session:
+        db_user = await get_or_create_user(session, user)
+        user_pk = db_user.id
+    existing = await get_registration(user_pk, webinar_id)
+    if existing and existing.status in {
+        RegistrationStatus.APPROVED.value,
+        RegistrationStatus.PENDING_REVIEW.value,
+        RegistrationStatus.PENDING_PAYMENT.value,
+        RegistrationStatus.REJECTED.value,
+    }:
+        await query.answer("قبلاً پاسخ داده‌اید.", show_alert=True)
+        try:
+            await query.message.delete()
+        except TelegramError:
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except TelegramError:
+                pass
+        return
+
     await query.answer()
+    try:
+        await query.message.delete()
+    except TelegramError:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except TelegramError:
+            pass
+
     registrant_name = context.user_data.get("webinar_registrant_name")
     if choice == "free":
         await upsert_registration(
