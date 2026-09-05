@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import User
+from bot.database.session import get_session
 
 
 def build_full_name(tg_user: TelegramUser) -> str | None:
@@ -38,3 +39,9 @@ async def get_or_create_user(session: AsyncSession, tg_user: TelegramUser) -> Us
     user.full_name = full_name
     await session.flush()
     return user
+
+
+async def list_all_telegram_ids() -> list[int]:
+    async with get_session() as session:
+        result = await session.execute(select(User.telegram_id))
+        return [row[0] for row in result.all()]

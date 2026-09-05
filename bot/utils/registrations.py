@@ -126,6 +126,18 @@ async def upsert_registration(
                 reg.admin_note = None
                 reg.reviewed_at = None
                 reg.reviewed_by_admin_id = None
+            if kind == RegistrationKind.FREE.value:
+                reg.receipt_file_id = None
+                reg.receipt_file_type = None
+                reg.name_fa = None
+                reg.name_en = None
+                reg.national_id = None
+                reg.phone = None
+                reg.info_text = None
+                reg.admin_note = None
+                reg.reviewed_by_admin_id = None
+                if status == RegistrationStatus.APPROVED.value:
+                    reg.reviewed_at = datetime.now(timezone.utc)
         await session.flush()
         await session.refresh(reg)
         return reg
@@ -137,16 +149,40 @@ async def set_registration_status(
     status: str,
     admin_telegram_id: int | None = None,
     admin_note: str | None = None,
+    kind: str | None = None,
+    clear_certificate_fields: bool = False,
 ) -> WebinarRegistration | None:
     async with get_session() as session:
         reg = await session.get(WebinarRegistration, registration_id)
         if reg is None:
             return None
         reg.status = status
+        if kind is not None:
+            reg.kind = kind
         reg.reviewed_by_admin_id = admin_telegram_id
         reg.reviewed_at = datetime.now(timezone.utc)
         if admin_note is not None:
             reg.admin_note = admin_note
+        if clear_certificate_fields or kind == RegistrationKind.FREE.value:
+            reg.receipt_file_id = None
+            reg.receipt_file_type = None
+            reg.name_fa = None
+            reg.name_en = None
+            reg.national_id = None
+            reg.phone = None
+            reg.info_text = None
+            if kind == RegistrationKind.FREE.value:
+                reg.admin_note = admin_note
+        if status == RegistrationStatus.PENDING_PAYMENT.value:
+            reg.receipt_file_id = None
+            reg.receipt_file_type = None
+            reg.name_fa = None
+            reg.name_en = None
+            reg.national_id = None
+            reg.phone = None
+            reg.info_text = None
+            if kind is None:
+                reg.kind = RegistrationKind.CERTIFICATE.value
         await session.flush()
         await session.refresh(reg)
         return reg
@@ -170,17 +206,28 @@ async def list_registrations_for_webinar(
         return list(result.scalars().all())
 
 
-async def list_approved_telegram_ids(webinar_id: int) -> list[int]:
+async def list_registration_telegram_ids(
+    webinar_id: int,
+    *,
+    status: str | None = None,
+) -> list[int]:
     async with get_session() as session:
-        result = await session.execute(
+        stmt = (
             select(User.telegram_id)
             .join(WebinarRegistration, WebinarRegistration.user_id == User.id)
-            .where(
-                WebinarRegistration.webinar_id == webinar_id,
-                WebinarRegistration.status == RegistrationStatus.APPROVED.value,
-            )
+            .where(WebinarRegistration.webinar_id == webinar_id)
         )
+        if status:
+            stmt = stmt.where(WebinarRegistration.status == status)
+        result = await session.execute(stmt)
         return [row[0] for row in result.all()]
+
+
+async def list_approved_telegram_ids(webinar_id: int) -> list[int]:
+    return await list_registration_telegram_ids(
+        webinar_id,
+        status=RegistrationStatus.APPROVED.value,
+    )
 
 
 def registration_summary(reg: WebinarRegistration) -> str:

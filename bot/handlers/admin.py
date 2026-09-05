@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select
 from telegram import Update
-from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from bot.config import get_settings
@@ -17,6 +16,7 @@ from bot.database.models import GiftFileClaim, SupportDirection, SupportMessage,
 from bot.database.session import get_session
 from bot.utils.buttons import BTN_STATS
 from bot.utils.keyboards import main_menu_keyboard
+from bot.utils.users import list_all_telegram_ids
 
 logger = logging.getLogger(__name__)
 
@@ -173,23 +173,16 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     text = " ".join(context.args).strip() if context.args else ""
     if not text:
-        await message.reply_text("استفاده: /broadcast <متن پیام>")
+        await message.reply_text(
+            "استفاده سریع: /broadcast <متن پیام>\n"
+            "یا از «⚙️ مدیریت منو» → «📢 پیام همگانی» مخاطب را انتخاب کنید."
+        )
         return
 
-    async with get_session() as session:
-        result = await session.execute(select(User.telegram_id))
-        telegram_ids = [row[0] for row in result.all()]
+    from bot.handlers.admin_panel import broadcast_text_to_users
 
-    sent = 0
-    failed = 0
-    for telegram_id in telegram_ids:
-        try:
-            await context.bot.send_message(chat_id=telegram_id, text=text)
-            sent += 1
-        except TelegramError as exc:
-            failed += 1
-            logger.warning("Broadcast failed for %s: %s", telegram_id, exc)
-
+    telegram_ids = await list_all_telegram_ids()
+    sent, failed = await broadcast_text_to_users(context.bot, telegram_ids, text)
     await message.reply_text(f"برودکست تمام شد.\nموفق: {sent}\nناموفق: {failed}")
 
 

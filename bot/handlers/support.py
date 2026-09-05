@@ -155,6 +155,12 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
     ) or context.user_data.get("awaiting_cert_info_webinar_id"):
         return
 
+    # Active admin↔user chat about a pending receipt.
+    from bot.handlers.webinar import get_active_reg_chat
+
+    if get_active_reg_chat(user.id):
+        return
+
     if not await is_feature_enabled(FEATURE_SUPPORT):
         await message.reply_text(
             "پشتیبانی فعلاً فعال نیست.",
@@ -216,7 +222,16 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not settings.is_admin(admin.id):
         return
 
-    target_user_id = _resolve_target_user(admin.id, message.reply_to_message)
+    # Registration chat replies are handled in webinar.py
+    from bot.handlers.webinar import parse_reg_chat_tag
+
+    replied = message.reply_to_message
+    if parse_reg_chat_tag(replied.text) or parse_reg_chat_tag(replied.caption):
+        return
+    if context.user_data.get("awaiting_admin_reg_chat"):
+        return
+
+    target_user_id = _resolve_target_user(admin.id, replied)
     if target_user_id is None:
         await message.reply_text(
             "برای پاسخ پشتیبانی، روی پیام اعلان بات (حاوی #TICKET_...) یا پیام فوروارد‌شده ریپلای کنید."

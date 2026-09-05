@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -18,6 +19,7 @@ from telegram.ext import (
 )
 
 from bot.config import get_settings
+from bot.database.models import RegistrationStatus
 from bot.utils.buttons import BTN_CANCEL, BTN_MANAGE, BTN_SKIP
 from bot.utils.channels import (
     channel_label,
@@ -30,6 +32,9 @@ from bot.utils.channels import (
 from bot.utils.features import FEATURE_LABELS, toggle_feature
 from bot.utils.keyboards import (
     admin_panel_keyboard,
+    broadcast_audience_keyboard,
+    broadcast_segment_keyboard,
+    broadcast_webinar_pick_keyboard,
     channel_manage_keyboard,
     confirm_keyboard,
     gift_file_manage_keyboard,
@@ -48,9 +53,11 @@ from bot.utils.gifts import (
 from bot.utils.payment import get_payment_card, set_payment_card
 from bot.utils.registrations import (
     get_registration_by_id,
+    list_registration_telegram_ids,
     list_registrations_for_webinar,
     registration_summary,
 )
+from bot.utils.users import list_all_telegram_ids
 from bot.utils.webinars import (
     DETAILS_MAX,
     build_webinar_message,
@@ -80,20 +87,26 @@ logger = logging.getLogger(__name__)
     ASK_PAYMENT_CARD,
     ASK_PAYMENT_HOLDER,
     ASK_GIFT_FILE,
-) = range(13)
+    BROADCAST_PICK,
+    BROADCAST_TEXT,
+    BROADCAST_CONFIRM,
+) = range(16)
 
 PANEL_TEXT = (
     "⚙️ مدیریت منو\n\n"
     "• دکمه‌ها و کانال‌های اجباری\n"
     "• وبینار + مدرک/پرداخت\n"
     "• فایل‌های هدیه (آپلود/حذف)\n"
-    "• کارت بانکی برای واریز مدرک"
+    "• کارت بانکی برای واریز مدرک\n"
+    "• پیام همگانی با انتخاب مخاطب"
 )
 
 ADMIN_CALLBACK_PATTERN = (
     r"^admin:(panel|payment|gifts|toggle:|channel:(view|delete|delete_yes):|"
-    r"webinar:(view|toggle|cert|regs|reg|send|send_yes|delete|delete_yes):)"
+    r"webinar:(view|toggle|cert|regs|pending|reg|send|send_yes|delete|delete_yes):)"
 )
+
+BROADCAST_CALLBACK_PATTERN = r"^admin:broadcast(?::.*)?$"
 
 EDIT_PROMPTS = {
     "title": "نام جدید وبینار را بفرستید:",
@@ -106,6 +119,14 @@ EDIT_PROMPTS = {
 
 BTN_CERT_YES = "بله، مدرک دارد"
 BTN_CERT_NO = "خیر، بدون مدرک"
+
+BROADCAST_SEGMENTS = {
+    "approved": "ثبت‌نامی‌های تاییدشده",
+    "all": "همه ثبت‌نام‌ها (هر وضعیت)",
+    "pending": "در انتظار بررسی رسید",
+}
+
+BROADCAST_TEXT_MAX = 4000
 
 
 def _is_admin(update: Update) -> bool:
@@ -417,6 +438,35 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
+    if data.startswith("admin:webinar:pending:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await _edit_panel(query)
+            return
+        regs = await list_registrations_for_webinar(
+            webinar_id,
+            status=RegistrationStatus.PENDING_REVIEW.value,
+        )
+        if not regs:
+            await query.edit_message_text(
+                f"هیچ ثبت‌نام در انتظار بررسی برای «{webinar.title}» نیست.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("« بازگشت", callback_data=f"admin:webinar:view:{webinar_id}")]]
+                ),
+            )
+            return
+        await query.edit_message_text(
+            f"🧾 در انتظار بررسی «{webinar.title}» ({len(regs)} نفر)\n"
+            "روی هر مورد بزنید تا گفتگو کنید یا تایید/رد کنید.",
+            reply_markup=registration_list_keyboard(
+                webinar_id,
+                regs,
+                back_callback=f"admin:webinar:view:{webinar_id}",
+            ),
+        )
+        return
+
     if data.startswith("admin:webinar:reg:"):
         registration_id = int(data.rsplit(":", 1)[-1])
         reg = await get_registration_by_id(registration_id)
@@ -429,13 +479,23 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         await query.edit_message_text(
             text,
-            reply_markup=_registration_admin_keyboard(reg.id, reg.status),
+            reply_markup=_registration_admin_keyboard(reg.id, reg.status, kind=reg.kind),
         )
         if query.message and reg.webinar:
+            back = (
+                f"admin:webinar:pending:{reg.webinar_id}"
+                if reg.status == RegistrationStatus.PENDING_REVIEW.value
+                else f"admin:webinar:regs:{reg.webinar_id}"
+            )
+            back_label = (
+                "« لیست در انتظار بررسی"
+                if reg.status == RegistrationStatus.PENDING_REVIEW.value
+                else "« لیست ثبت‌نام‌ها"
+            )
             await query.message.reply_text(
                 "بازگشت به لیست:",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("« لیست ثبت‌نام‌ها", callback_data=f"admin:webinar:regs:{reg.webinar_id}")]]
+                    [[InlineKeyboardButton(back_label, callback_data=back)]]
                 ),
             )
         return
@@ -1104,6 +1164,272 @@ async def receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+
+# --- Broadcast (پیام همگانی) ---
+
+
+def _broadcast_audience_label(draft: dict) -> str:
+    kind = draft.get("audience")
+    if kind == "all":
+        return "همه اعضای ربات"
+    webinar_title = draft.get("webinar_title") or "وبینار"
+    segment = draft.get("segment", "approved")
+    seg_label = BROADCAST_SEGMENTS.get(segment, segment)
+    return f"{seg_label} · «{webinar_title}»"
+
+
+async def _resolve_broadcast_ids(draft: dict) -> list[int]:
+    kind = draft.get("audience")
+    if kind == "all":
+        return await list_all_telegram_ids()
+    webinar_id = draft.get("webinar_id")
+    if not isinstance(webinar_id, int):
+        return []
+    segment = draft.get("segment", "approved")
+    if segment == "all":
+        return await list_registration_telegram_ids(webinar_id)
+    if segment == "pending":
+        return await list_registration_telegram_ids(
+            webinar_id,
+            status=RegistrationStatus.PENDING_REVIEW.value,
+        )
+    return await list_registration_telegram_ids(
+        webinar_id,
+        status=RegistrationStatus.APPROVED.value,
+    )
+
+
+async def broadcast_text_to_users(bot, telegram_ids: list[int], text: str) -> tuple[int, int]:
+    sent = 0
+    failed = 0
+    for telegram_id in telegram_ids:
+        try:
+            await bot.send_message(chat_id=telegram_id, text=text)
+            sent += 1
+        except TelegramError as exc:
+            failed += 1
+            logger.warning("Broadcast failed for %s: %s", telegram_id, exc)
+        await asyncio.sleep(0.05)
+    return sent, failed
+
+
+async def _prompt_broadcast_text(query, context: ContextTypes.DEFAULT_TYPE) -> int:
+    draft = context.user_data.get("broadcast") or {}
+    label = _broadcast_audience_label(draft)
+    await query.message.reply_text(  # type: ignore[union-attr]
+        f"مخاطب: {label}\n\n"
+        "متن پیام همگانی را بفرستید.\n"
+        "برای انصراف «انصراف» را بزنید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return BROADCAST_TEXT
+
+
+async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    context.user_data.clear()
+    context.user_data["broadcast"] = {}
+    await query.edit_message_text(
+        "📢 پیام همگانی\n\nمخاطبان هدف را انتخاب کنید:",
+        reply_markup=broadcast_audience_keyboard(),
+    )
+    return BROADCAST_PICK
+
+
+async def broadcast_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    data = query.data
+    await query.answer()
+
+    if data == "admin:panel":
+        context.user_data.clear()
+        await panel_callback(update, context)
+        return ConversationHandler.END
+
+    if data == "admin:broadcast":
+        context.user_data["broadcast"] = {}
+        await query.edit_message_text(
+            "📢 پیام همگانی\n\nمخاطبان هدف را انتخاب کنید:",
+            reply_markup=broadcast_audience_keyboard(),
+        )
+        return BROADCAST_PICK
+
+    if data == "admin:broadcast:aud:all":
+        context.user_data["broadcast"] = {"audience": "all"}
+        return await _prompt_broadcast_text(query, context)
+
+    if data == "admin:broadcast:aud:webinar":
+        webinars_kb = await broadcast_webinar_pick_keyboard()
+        if len(webinars_kb.inline_keyboard) <= 1:
+            await query.edit_message_text(
+                "هنوز وبیناری ثبت نشده است.",
+                reply_markup=broadcast_audience_keyboard(),
+            )
+            return BROADCAST_PICK
+        await query.edit_message_text(
+            "وبینار مورد نظر را انتخاب کنید:",
+            reply_markup=webinars_kb,
+        )
+        return BROADCAST_PICK
+
+    if data.startswith("admin:broadcast:wb:"):
+        webinar_id = int(data.rsplit(":", 1)[-1])
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.edit_message_text(
+                "وبینار پیدا نشد.",
+                reply_markup=broadcast_audience_keyboard(),
+            )
+            return BROADCAST_PICK
+        context.user_data["broadcast"] = {
+            "audience": "webinar",
+            "webinar_id": webinar.id,
+            "webinar_title": webinar.title,
+        }
+        await query.edit_message_text(
+            f"مخاطبان «{webinar.title}»:\nکدام گروه؟",
+            reply_markup=broadcast_segment_keyboard(webinar.id),
+        )
+        return BROADCAST_PICK
+
+    if data.startswith("admin:broadcast:seg:"):
+        parts = data.split(":")
+        if len(parts) < 5:
+            return BROADCAST_PICK
+        webinar_id = int(parts[3])
+        segment = parts[4]
+        if segment not in BROADCAST_SEGMENTS:
+            return BROADCAST_PICK
+        webinar = await get_webinar(webinar_id)
+        if webinar is None:
+            await query.edit_message_text(
+                "وبینار پیدا نشد.",
+                reply_markup=broadcast_audience_keyboard(),
+            )
+            return BROADCAST_PICK
+        context.user_data["broadcast"] = {
+            "audience": "webinar",
+            "webinar_id": webinar.id,
+            "webinar_title": webinar.title,
+            "segment": segment,
+        }
+        return await _prompt_broadcast_text(query, context)
+
+    return BROADCAST_PICK
+
+
+async def receive_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or message.text is None or user is None:
+        return BROADCAST_TEXT
+    left = await _maybe_leave_wizard(update, context)
+    if left is not None:
+        return left
+
+    text = message.text.strip()
+    if not text:
+        await message.reply_text(
+            "متن پیام نمی‌تواند خالی باشد.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return BROADCAST_TEXT
+    if len(text) > BROADCAST_TEXT_MAX:
+        await message.reply_text(
+            f"متن پیام حداکثر {BROADCAST_TEXT_MAX} کاراکتر باشد.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return BROADCAST_TEXT
+
+    draft = context.user_data.setdefault("broadcast", {})
+    draft["text"] = text
+    recipients = await _resolve_broadcast_ids(draft)
+    draft["recipient_count"] = len(recipients)
+    label = _broadcast_audience_label(draft)
+    preview = text if len(text) <= 500 else text[:500] + "…"
+
+    await message.reply_text(
+        f"پیش‌نمایش پیام همگانی\n\n"
+        f"مخاطب: {label}\n"
+        f"تعداد گیرندگان: {len(recipients)} نفر\n\n"
+        f"———\n{preview}\n———\n\n"
+        "ارسال شود؟",
+        reply_markup=confirm_keyboard("admin:broadcast:yes", "admin:broadcast:no"),
+    )
+    return BROADCAST_CONFIRM
+
+
+async def broadcast_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    data = query.data
+    user = update.effective_user
+
+    if data in {"admin:broadcast:no", "admin:panel", "admin:broadcast"}:
+        context.user_data.clear()
+        if data == "admin:panel":
+            await panel_callback(update, context)
+        else:
+            await query.edit_message_text("ارسال پیام همگانی لغو شد.")
+            if query.message:
+                await query.message.reply_text(
+                    PANEL_TEXT,
+                    reply_markup=await admin_panel_keyboard(),
+                )
+        return ConversationHandler.END
+
+    if data != "admin:broadcast:yes":
+        return BROADCAST_CONFIRM
+
+    draft = context.user_data.get("broadcast") or {}
+    text = draft.get("text")
+    if not text:
+        await query.edit_message_text("متن پیام پیدا نشد. دوباره از پیام همگانی شروع کنید.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    recipients = await _resolve_broadcast_ids(draft)
+    label = _broadcast_audience_label(draft)
+    await query.edit_message_text(
+        f"در حال ارسال به {len(recipients)} نفر ({label})…"
+    )
+    sent, failed = await broadcast_text_to_users(context.bot, recipients, text)
+    context.user_data.clear()
+    await query.message.reply_text(  # type: ignore[union-attr]
+        f"پیام همگانی تمام شد.\n"
+        f"مخاطب: {label}\n"
+        f"موفق: {sent}\n"
+        f"ناموفق: {failed}",
+        reply_markup=await main_menu_keyboard(user.id),
+    )
+    if query.message:
+        await query.message.reply_text(
+            PANEL_TEXT,
+            reply_markup=await admin_panel_keyboard(),
+        )
+    return ConversationHandler.END
+
+
+
 def build_conversation() -> ConversationHandler:
     cancel_filters = filters.Regex(f"^{re.escape(BTN_CANCEL)}$") | filters.Regex(
         f"^{re.escape(BTN_MANAGE)}$"
@@ -1114,6 +1440,7 @@ def build_conversation() -> ConversationHandler:
             CallbackQueryHandler(start_channel_create, pattern=r"^admin:channel:new$"),
             CallbackQueryHandler(start_payment_edit, pattern=r"^admin:payment:edit$"),
             CallbackQueryHandler(start_gift_upload, pattern=r"^admin:gifts:upload$"),
+            CallbackQueryHandler(start_broadcast, pattern=r"^admin:broadcast$"),
             CallbackQueryHandler(
                 start_edit,
                 pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|group|price)$",
@@ -1143,6 +1470,21 @@ def build_conversation() -> ConversationHandler:
             ASK_GIFT_FILE: [
                 MessageHandler(filters.Document.ALL & ~filters.COMMAND, receive_gift_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_gift_file),
+            ],
+            BROADCAST_PICK: [
+                CallbackQueryHandler(broadcast_pick_callback, pattern=BROADCAST_CALLBACK_PATTERN),
+                CallbackQueryHandler(broadcast_pick_callback, pattern=r"^admin:panel$"),
+            ],
+            BROADCAST_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_broadcast_text),
+            ],
+            BROADCAST_CONFIRM: [
+                CallbackQueryHandler(
+                    broadcast_confirm_callback,
+                    pattern=r"^admin:broadcast:(yes|no)$",
+                ),
+                CallbackQueryHandler(broadcast_confirm_callback, pattern=r"^admin:panel$"),
+                CallbackQueryHandler(broadcast_confirm_callback, pattern=r"^admin:broadcast$"),
             ],
         },
         fallbacks=[

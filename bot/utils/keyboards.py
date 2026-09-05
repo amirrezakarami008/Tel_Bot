@@ -91,6 +91,7 @@ async def admin_panel_keyboard() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("💳 تنظیمات پرداخت (کارت)", callback_data="admin:payment")],
         [InlineKeyboardButton("🎁 مدیریت فایل‌های هدیه", callback_data="admin:gifts")],
+        [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin:broadcast")],
         [InlineKeyboardButton("➕ افزودن کانال اجباری", callback_data="admin:channel:new")],
     ]
     for channel in channels:
@@ -114,6 +115,76 @@ async def admin_panel_keyboard() -> InlineKeyboardMarkup:
             ]
         )
     return InlineKeyboardMarkup(rows)
+
+
+def broadcast_audience_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "👥 همه اعضای ربات",
+                    callback_data="admin:broadcast:aud:all",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎓 ثبت‌نامی‌های یک وبینار",
+                    callback_data="admin:broadcast:aud:webinar",
+                )
+            ],
+            [InlineKeyboardButton("« بازگشت", callback_data="admin:panel")],
+        ]
+    )
+
+
+async def broadcast_webinar_pick_keyboard() -> InlineKeyboardMarkup:
+    from bot.utils.webinars import list_webinars
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for webinar in await list_webinars():
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    webinar.title,
+                    callback_data=f"admin:broadcast:wb:{webinar.id}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton("« بازگشت", callback_data="admin:broadcast")]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def broadcast_segment_keyboard(webinar_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ فقط تاییدشده‌ها",
+                    callback_data=f"admin:broadcast:seg:{webinar_id}:approved",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📋 همه ثبت‌نام‌ها (هر وضعیت)",
+                    callback_data=f"admin:broadcast:seg:{webinar_id}:all",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🧾 در انتظار بررسی رسید",
+                    callback_data=f"admin:broadcast:seg:{webinar_id}:pending",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "« انتخاب وبینار",
+                    callback_data="admin:broadcast:aud:webinar",
+                )
+            ],
+        ]
+    )
 
 
 def channel_manage_keyboard(channel_id: int) -> InlineKeyboardMarkup:
@@ -175,6 +246,12 @@ def webinar_manage_keyboard(webinar_id: int, *, visible: bool, has_certificate: 
             [InlineKeyboardButton("👥 ثبت‌نام‌ها", callback_data=f"admin:webinar:regs:{webinar_id}")],
             [
                 InlineKeyboardButton(
+                    "🧾 در انتظار بررسی",
+                    callback_data=f"admin:webinar:pending:{webinar_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     "📤 ارسال لینک به ثبت‌نامی‌ها",
                     callback_data=f"admin:webinar:send:{webinar_id}",
                 )
@@ -185,7 +262,12 @@ def webinar_manage_keyboard(webinar_id: int, *, visible: bool, has_certificate: 
     )
 
 
-def registration_list_keyboard(webinar_id: int, registrations: list) -> InlineKeyboardMarkup:
+def registration_list_keyboard(
+    webinar_id: int,
+    registrations: list,
+    *,
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for reg in registrations[:30]:
         user = getattr(reg, "user", None)
@@ -211,7 +293,14 @@ def registration_list_keyboard(webinar_id: int, registrations: list) -> InlineKe
                 )
             ]
         )
-    rows.append([InlineKeyboardButton("« بازگشت", callback_data=f"admin:webinar:view:{webinar_id}")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "« بازگشت",
+                callback_data=back_callback or f"admin:webinar:view:{webinar_id}",
+            )
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
