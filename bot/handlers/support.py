@@ -335,5 +335,5 @@ def register(application: Application) -> None:
             ),
             handle_user_support,
         ),
-        group=2,
+        group=5,
     )

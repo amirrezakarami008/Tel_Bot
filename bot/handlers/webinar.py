@@ -445,7 +445,8 @@ async def _start_registration_flow(
 async def handle_webinar_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route private text for webinar name or certificate-info steps.
 
-    Must be a single group-1 handler: PTB runs only the first matching handler per group.
+    Raises ApplicationHandlerStop only when a step is actually handled so later
+    handler groups (reg-chat / support) can still run.
     """
     if context.user_data.get(AWAITING_CERT_INFO_KEY):
         await handle_cert_info_input(update, context)
@@ -1385,15 +1386,8 @@ def register(application: Application) -> None:
         ),
         group=-1,
     )
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE
-            & ~filters.COMMAND
-            & (filters.TEXT | filters.PHOTO | filters.Document.ALL),
-            handle_admin_reg_chat_message,
-        ),
-        group=1,
-    )
+    # Separate groups so an early `return` does not swallow later handlers.
+    # (Same-group handlers stop after the first matching filter.)
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE
@@ -1410,7 +1404,16 @@ def register(application: Application) -> None:
             & (filters.PHOTO | filters.Document.ALL),
             handle_receipt_upload,
         ),
-        group=1,
+        group=2,
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE
+            & ~filters.COMMAND
+            & (filters.TEXT | filters.PHOTO | filters.Document.ALL),
+            handle_admin_reg_chat_message,
+        ),
+        group=3,
     )
     application.add_handler(
         MessageHandler(
@@ -1425,5 +1428,5 @@ def register(application: Application) -> None:
             ),
             handle_user_reg_chat_message,
         ),
-        group=1,
+        group=4,
     )
