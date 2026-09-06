@@ -26,6 +26,10 @@ async def post_init(application: Application) -> None:
 
     from telegram import BotCommand
 
+    from bot.utils.backup import schedule_nightly_backup
+
+    schedule_nightly_backup(application)
+
     await application.bot.set_my_commands(
         [
             BotCommand("start", "شروع و منوی اصلی"),

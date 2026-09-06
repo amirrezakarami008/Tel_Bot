@@ -57,6 +57,7 @@ from bot.utils.registrations import (
     list_registrations_for_webinar,
     registration_summary,
 )
+from bot.utils.backup import BackupError, send_database_backup
 from bot.utils.users import list_all_telegram_ids
 from bot.utils.webinars import (
     DETAILS_MAX,
@@ -98,11 +99,12 @@ PANEL_TEXT = (
     "• وبینار + مدرک/پرداخت\n"
     "• فایل‌های هدیه (آپلود/حذف)\n"
     "• کارت بانکی برای واریز مدرک\n"
-    "• پیام همگانی با انتخاب مخاطب"
+    "• پیام همگانی با انتخاب مخاطب\n"
+    "• بک‌آپ دیتابیس (دستی و هر شب ۱۲ شب)"
 )
 
 ADMIN_CALLBACK_PATTERN = (
-    r"^admin:(panel|payment|gifts|toggle:|channel:(view|delete|delete_yes):|"
+    r"^admin:(panel|payment|gifts|backup|toggle:|channel:(view|delete|delete_yes):|"
     r"webinar:(view|toggle|cert|regs|pending|reg|send|send_yes|delete|delete_yes):)"
 )
 
@@ -291,6 +293,25 @@ async def _handle_gifts_callback(
         await _show_gifts_panel(query)
 
 
+async def _handle_manual_backup(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = query.message
+    if message is None:
+        return
+    status = await message.reply_text("⏳ در حال تهیه بک‌آپ کامل دیتابیس…")
+    try:
+        dump = await send_database_backup(context.bot, reason="بک‌آپ دستی از پنل ادمین")
+        await status.edit_text(
+            "✅ بک‌آپ آماده شد و فقط برای ادمین(ها) ارسال شد.\n"
+            f"📄 {dump.filename}"
+        )
+    except BackupError as exc:
+        logger.error("Manual database backup failed: %s", exc)
+        await status.edit_text(f"❌ تهیه بک‌آپ ناموفق بود.\n{exc}")
+    except Exception:
+        logger.exception("Manual database backup failed")
+        await status.edit_text("❌ تهیه بک‌آپ ناموفق بود. جزئیات در لاگ سرور است.")
+
+
 async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.data is None or update.effective_user is None:
@@ -299,8 +320,13 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
         return
 
-    await query.answer()
     data = query.data
+    if data == "admin:backup":
+        await query.answer("در حال تهیه بک‌آپ…")
+        await _handle_manual_backup(query, context)
+        return
+
+    await query.answer()
 
     if data == "admin:panel":
         await _edit_panel(query)

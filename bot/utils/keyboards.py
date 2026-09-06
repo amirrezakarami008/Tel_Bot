@@ -92,6 +92,7 @@ async def admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("💳 تنظیمات پرداخت (کارت)", callback_data="admin:payment")],
         [InlineKeyboardButton("🎁 مدیریت فایل‌های هدیه", callback_data="admin:gifts")],
         [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin:broadcast")],
+        [InlineKeyboardButton("💾 بک‌آپ دیتابیس", callback_data="admin:backup")],
         [InlineKeyboardButton("➕ افزودن کانال اجباری", callback_data="admin:channel:new")],
     ]
     for channel in channels:
