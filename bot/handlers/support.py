@@ -52,21 +52,22 @@ RATE_LIMIT_SECONDS = 10.0
 # telegram_id -> last support message monotonic timestamp
 _last_support_at: dict[int, float] = {}
 
-# (admin_telegram_id, admin_chat_message_id) -> user telegram_id
-_reply_targets: dict[tuple[int, int], int] = {}
+# (admin_telegram_id, admin_chat_message_id) -> (user_telegram_id, user_message_id)
+_reply_targets: dict[tuple[int, int], tuple[int, int]] = {}
 
 
 def build_ticket_tag(user_id: int, message_id: int) -> str:
     return f"#TICKET_{user_id}_{message_id}"
 
 
-def parse_ticket_tag(text: str | None) -> int | None:
+def parse_ticket_tag(text: str | None) -> tuple[int, int] | None:
+    """Return (user_telegram_id, user_message_id) from a #TICKET_... tag."""
     if not text:
         return None
     match = TICKET_RE.search(text)
     if not match:
         return None
-    return int(match.group(1))
+    return int(match.group(1)), int(match.group(2))
 
 
 def _is_rate_limited(user_id: int) -> bool:
@@ -97,11 +98,19 @@ def _message_preview(message: Message) -> str:
     return "[media]"
 
 
-def _remember_reply_target(admin_id: int, message_id: int, user_telegram_id: int) -> None:
-    _reply_targets[(admin_id, message_id)] = user_telegram_id
+def _remember_reply_target(
+    admin_id: int,
+    message_id: int,
+    user_telegram_id: int,
+    user_message_id: int,
+) -> None:
+    _reply_targets[(admin_id, message_id)] = (user_telegram_id, user_message_id)
 
 
-def _resolve_target_user(admin_id: int, replied: Message) -> int | None:
+def _resolve_reply_target(
+    admin_id: int, replied: Message
+) -> tuple[int, int] | None:
+    """Return (user_telegram_id, user_message_id) for an admin reply target."""
     mapped = _reply_targets.get((admin_id, replied.message_id))
     if mapped is not None:
         return mapped
@@ -117,16 +126,21 @@ async def _notify_admins(
     header: str,
 ) -> None:
     settings = get_settings()
+    user_message_id = user_message.message_id
     for admin_id in settings.admin_ids:
         try:
             notice = await context.bot.send_message(
                 chat_id=admin_id,
                 text=f"{header}\n{ticket}",
             )
-            _remember_reply_target(admin_id, notice.message_id, user_telegram_id)
+            _remember_reply_target(
+                admin_id, notice.message_id, user_telegram_id, user_message_id
+            )
 
             forwarded = await user_message.forward(chat_id=admin_id)
-            _remember_reply_target(admin_id, forwarded.message_id, user_telegram_id)
+            _remember_reply_target(
+                admin_id, forwarded.message_id, user_telegram_id, user_message_id
+            )
         except TelegramError as exc:
             logger.error("Failed to notify admin %s: %s", admin_id, exc)
 
@@ -231,12 +245,18 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if context.user_data.get("awaiting_admin_reg_chat"):
         return
 
-    target_user_id = _resolve_target_user(admin.id, replied)
-    if target_user_id is None:
+    target = _resolve_reply_target(admin.id, replied)
+    if target is None:
         await message.reply_text(
             "برای پاسخ پشتیبانی، روی پیام اعلان بات (حاوی #TICKET_...) یا پیام فوروارد‌شده ریپلای کنید."
         )
         return
+
+    target_user_id, user_message_id = target
+    reply_kwargs = {
+        "reply_to_message_id": user_message_id,
+        "allow_sending_without_reply": True,
+    }
 
     reply_body = message.text or message.caption
     has_media = bool(message.photo or message.document or message.voice or message.video)
@@ -246,30 +266,36 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
         if message.text:
-            await context.bot.send_message(chat_id=target_user_id, text=message.text)
+            await context.bot.send_message(
+                chat_id=target_user_id, text=message.text, **reply_kwargs
+            )
         elif message.photo:
             await context.bot.send_photo(
                 chat_id=target_user_id,
                 photo=message.photo[-1].file_id,
                 caption=message.caption,
+                **reply_kwargs,
             )
         elif message.document:
             await context.bot.send_document(
                 chat_id=target_user_id,
                 document=message.document.file_id,
                 caption=message.caption,
+                **reply_kwargs,
             )
         elif message.voice:
             await context.bot.send_voice(
                 chat_id=target_user_id,
                 voice=message.voice.file_id,
                 caption=message.caption,
+                **reply_kwargs,
             )
         elif message.video:
             await context.bot.send_video(
                 chat_id=target_user_id,
                 video=message.video.file_id,
                 caption=message.caption,
+                **reply_kwargs,
             )
         else:
             await message.reply_text("این نوع پیام برای رله پشتیبانی پشتیبانی نمی‌شود.")
