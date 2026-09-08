@@ -107,14 +107,46 @@ def _remember_reply_target(
     _reply_targets[(admin_id, message_id)] = (user_telegram_id, user_message_id)
 
 
+def _user_id_from_forward(replied: Message) -> int | None:
+    """Best-effort user id from a forwarded support message."""
+    if replied.forward_from is not None:
+        return replied.forward_from.id
+    origin = getattr(replied, "forward_origin", None)
+    sender = getattr(origin, "sender_user", None) if origin is not None else None
+    if sender is not None:
+        return sender.id
+    return None
+
+
 def _resolve_reply_target(
     admin_id: int, replied: Message
-) -> tuple[int, int] | None:
-    """Return (user_telegram_id, user_message_id) for an admin reply target."""
+) -> tuple[int, int | None] | None:
+    """Return (user_telegram_id, user_message_id|None) for an admin reply target."""
     mapped = _reply_targets.get((admin_id, replied.message_id))
     if mapped is not None:
         return mapped
-    return parse_ticket_tag(replied.text) or parse_ticket_tag(replied.caption)
+    tagged = parse_ticket_tag(replied.text) or parse_ticket_tag(replied.caption)
+    if tagged is not None:
+        return tagged
+
+    # After restart, in-memory map is empty; recover user from the forward itself.
+    # Skip if this forward belongs to registration-chat flow.
+    forward_user_id = _user_id_from_forward(replied)
+    if forward_user_id is None:
+        return None
+
+    from bot.handlers.webinar import get_active_reg_chat, _resolve_reg_chat_user
+
+    if _resolve_reg_chat_user(admin_id, replied) is not None:
+        return None
+    if get_active_reg_chat(forward_user_id):
+        return None
+    return forward_user_id, None
+
+
+def _looks_like_support_notice(replied: Message) -> bool:
+    text = replied.text or replied.caption or ""
+    return "#TICKET_" in text or "پیام پشتیبانی" in text
 
 
 async def _notify_admins(
@@ -194,12 +226,14 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
         part for part in [user.first_name or "", user.last_name or ""] if part
     ).strip() or "—"
 
+    preview = _message_preview(message)
     header = (
         "📩 پیام پشتیبانی جدید\n"
         f"کاربر: {full_name}\n"
         f"Username: {username}\n"
         f"ID: {user.id}\n"
-        "برای پاسخ، روی این پیام یا پیام فوروارد‌شده ریپلای کنید."
+        f"💬 پیام: {preview}\n"
+        "برای پاسخ، روی همین پیام یا پیام فوروارد‌شده ریپلای کنید."
     )
 
     async with get_session() as session:
@@ -208,7 +242,7 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
             SupportMessage(
                 user_id=db_user.id,
                 direction=SupportDirection.USER_TO_ADMIN.value,
-                text=_message_preview(message),
+                text=preview,
                 admin_telegram_id=None,
             )
         )
@@ -247,16 +281,20 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     target = _resolve_reply_target(admin.id, replied)
     if target is None:
-        await message.reply_text(
-            "برای پاسخ پشتیبانی، روی پیام اعلان بات (حاوی #TICKET_...) یا پیام فوروارد‌شده ریپلای کنید."
-        )
+        # Don't swallow registration-chat replies handled in another group.
+        if _looks_like_support_notice(replied):
+            await message.reply_text(
+                "برای پاسخ پشتیبانی، روی پیام اعلان بات (حاوی #TICKET_...) یا پیام فوروارد‌شده ریپلای کنید."
+            )
         return
 
     target_user_id, user_message_id = target
-    reply_kwargs = {
-        "reply_to_message_id": user_message_id,
-        "allow_sending_without_reply": True,
-    }
+    reply_kwargs: dict = {}
+    if user_message_id is not None:
+        reply_kwargs = {
+            "reply_to_message_id": user_message_id,
+            "allow_sending_without_reply": True,
+        }
 
     reply_body = message.text or message.caption
     has_media = bool(message.photo or message.document or message.voice or message.video)
@@ -340,12 +378,14 @@ async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def register(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop:"))
 
+    # Must be a different group than webinar's admin-reply handler (-1).
+    # Same-group handlers stop after the first match, even on early return.
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.REPLY & ~filters.COMMAND,
             handle_admin_reply,
         ),
-        group=-1,
+        group=-2,
     )
 
     application.add_handler(
