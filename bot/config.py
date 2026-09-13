@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     # Optional: http://host:port or socks5://host:port (needed when Telegram is blocked)
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")
+    telegram_api_base_url: str | None = Field(default=None, alias="TELEGRAM_API_BASE_URL")
+    telegram_api_file_base_url: str | None = Field(
+        default=None,
+        alias="TELEGRAM_API_FILE_BASE_URL",
+    )
+    gift_max_file_size_mb: int = Field(default=100, gt=0, alias="GIFT_MAX_FILE_SIZE_MB")
 
     @field_validator("bot_token", "database_url", "admin_telegram_ids")
     @classmethod
@@ -53,7 +59,13 @@ class Settings(BaseSettings):
             return value.strip()
         return value
 
-    @field_validator("webinar_link", "telegram_proxy", mode="before")
+    @field_validator(
+        "webinar_link",
+        "telegram_proxy",
+        "telegram_api_base_url",
+        "telegram_api_file_base_url",
+        mode="before",
+    )
     @classmethod
     def empty_optional_as_none(cls, value: object) -> object:
         if value is None:

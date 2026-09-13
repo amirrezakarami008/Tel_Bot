@@ -1,4 +1,18 @@
 services:
+  telegram-api:
+    image: aiogram/telegram-bot-api:latest
+    profiles: [large-files]
+    command:
+      - --local
+      - --api-id=${TELEGRAM_API_ID}
+      - --api-hash=${TELEGRAM_API_HASH}
+      - --http-port=8081
+      - --http-ip-address=0.0.0.0
+      - --dir=/var/lib/telegram-bot-api
+    volumes:
+      - telegram_api_data:/var/lib/telegram-bot-api
+    restart: unless-stopped
+
   db:
     image: postgres:16
     restart: unless-stopped
@@ -37,3 +51,4 @@ services:
 
 volumes:
   postgres_data:
+  telegram_api_data:

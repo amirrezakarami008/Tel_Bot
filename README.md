@@ -27,6 +27,8 @@ cp .env.example .env
 | `DATABASE_URL` | رشته اتصال async SQLAlchemy (باید با سرویس `db` هم‌خوان باشد) |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | اعتبار PostgreSQL |
 | `LOG_LEVEL` | مثلاً `INFO` یا `DEBUG` |
+| `GIFT_MAX_FILE_SIZE_MB` | سقف فایل هدیه؛ پیش‌فرض `100` |
+| `TELEGRAM_API_BASE_URL` / `TELEGRAM_API_FILE_BASE_URL` | آدرس Local Bot API برای فایل‌های بزرگ |
 
 ### فرمت `REQUIRED_CHANNELS`
 
@@ -80,6 +82,29 @@ docker compose down
 ```
 
 سرویس `bot` تا آماده شدن healthcheck دیتابیس صبر می‌کند؛ در `main.py` نیز اتصال دیتابیس با retry انجام می‌شود.
+
+### فعال‌سازی فایل‌های هدیه تا ۱۰۰MB
+
+Bot API عمومی تلگرام دانلود فایل‌های بزرگ را برای بات‌ها محدود می‌کند. برای پشتیبانی از فایل‌های هدیه تا ۱۰۰MB، از Local Bot API استفاده کنید:
+
+1. از [my.telegram.org](https://my.telegram.org) مقدارهای `API_ID` و `API_HASH` بگیرید.
+2. در `.env` این مقدارها را تنظیم کنید:
+
+```env
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_API_BASE_URL=http://telegram-api:8081/bot
+TELEGRAM_API_FILE_BASE_URL=http://telegram-api:8081/file/bot
+GIFT_MAX_FILE_SIZE_MB=100
+```
+
+3. سرویس‌ها را با profile فایل بزرگ اجرا کنید:
+
+```bash
+docker compose --profile large-files up -d --build
+```
+
+با این profile، سرویس `telegram-api` به‌صورت Local Bot API اجرا می‌شود و فایل‌های بزرگ‌تر از محدودیت API عمومی را دریافت و ارسال می‌کند. فایل‌های بالاتر از ۱۰۰MB توسط خود ربات رد می‌شوند.
 
 ## ۴) اضافه / کم کردن کانال اجباری
 

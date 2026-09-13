@@ -48,7 +48,12 @@ def main() -> None:
         .post_init(post_init)
     )
 
-    if settings.telegram_proxy:
+    if settings.telegram_api_base_url:
+        builder = builder.base_url(settings.telegram_api_base_url)
+        if settings.telegram_api_file_base_url:
+            builder = builder.base_file_url(settings.telegram_api_file_base_url)
+        logger.info("Using Telegram Local Bot API: %s", settings.telegram_api_base_url)
+    elif settings.telegram_proxy:
         # Used for both Bot API calls and getUpdates polling
         builder = builder.proxy(settings.telegram_proxy).get_updates_proxy(
             settings.telegram_proxy

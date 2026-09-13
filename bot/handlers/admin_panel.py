@@ -1063,6 +1063,15 @@ async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return ASK_GIFT_FILE
 
+    max_size = get_settings().gift_max_file_size_mb * 1024 * 1024
+    if document.file_size is not None and document.file_size > max_size:
+        await message.reply_text(
+            f"حجم فایل بیشتر از حد مجاز است. حداکثر حجم: "
+            f"{get_settings().gift_max_file_size_mb} مگابایت.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_GIFT_FILE
+
     filename = document.file_name or f"gift_{document.file_unique_id}.bin"
     try:
         saved = await save_telegram_document(
