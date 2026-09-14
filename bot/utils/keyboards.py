@@ -10,6 +10,17 @@ from bot.utils.channels import channel_label, channel_to_dict, list_required_cha
 from bot.utils.features import FEATURE_GIFT, FEATURE_SUPPORT, is_feature_enabled
 from bot.utils.webinars import list_visible_webinars, webinar_button_text
 
+ADMIN_MENU_BUTTONS = {
+    "💬 وضعیت پشتیبانی",
+    "🎁 مدیریت فایل‌های هدیه",
+    "📢 پیام همگانی",
+    "🤖 تست پاسخ AI",
+    "📚 فایل دانش AI",
+    "💾 بک‌آپ دیتابیس",
+    "➕ افزودن وبینار",
+    "➕ افزودن کانال",
+}
+
 
 async def membership_keyboard(check_callback: str) -> InlineKeyboardMarkup:
     """Channel join buttons + membership verification button."""
@@ -56,6 +67,18 @@ async def main_menu_keyboard(
 
     if not rows:
         return ReplyKeyboardRemove()
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
+async def admin_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton("💬 وضعیت پشتیبانی"), KeyboardButton("🎁 مدیریت فایل‌های هدیه")],
+        [KeyboardButton("📢 پیام همگانی"), KeyboardButton("🤖 تست پاسخ AI")],
+        [KeyboardButton("📚 فایل دانش AI"), KeyboardButton("💾 بک‌آپ دیتابیس")],
+        [KeyboardButton("💳 تنظیمات پرداخت")],
+        [KeyboardButton("➕ افزودن وبینار"), KeyboardButton("➕ افزودن کانال")],
+        [KeyboardButton(BTN_MANAGE)],
+    ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 

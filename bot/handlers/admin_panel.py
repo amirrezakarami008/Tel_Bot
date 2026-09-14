@@ -32,6 +32,7 @@ from bot.utils.channels import (
 from bot.utils.features import FEATURE_LABELS, toggle_feature
 from bot.utils.keyboards import (
     admin_panel_keyboard,
+    admin_main_menu_keyboard,
     broadcast_audience_keyboard,
     broadcast_segment_keyboard,
     broadcast_webinar_pick_keyboard,
@@ -179,12 +180,8 @@ def _channel_view_text(channel) -> str:
 
 async def _show_panel_message(message, *, user_id: int) -> None:
     await message.reply_text(
-        PANEL_TEXT,
-        reply_markup=await main_menu_keyboard(user_id),
-    )
-    await message.reply_text(
-        "گزینه‌ها:",
-        reply_markup=await admin_panel_keyboard(),
+        "⚙️ مدیریت منو",
+        reply_markup=await admin_main_menu_keyboard(),
     )
 
 
@@ -200,6 +197,74 @@ async def open_manage_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _show_panel_message(message, user_id=user.id)
 
 
+async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None or not _is_admin(update) or not message.text:
+        return ConversationHandler.END
+
+    action = message.text.strip()
+    if action == "🤖 تست پاسخ AI":
+        return await start_ai_test_from_menu(update, context)
+    if action == "📚 فایل دانش AI":
+        return await start_ai_knowledge_from_menu(update, context)
+    if action == "💾 بک‌آپ دیتابیس":
+        try:
+            dump = await send_database_backup(context.bot, reason="بک‌آپ از منوی ادمین")
+            await message.reply_text(
+                f"✅ بک‌آپ ارسال شد.\n📄 {dump.filename}",
+                reply_markup=await admin_main_menu_keyboard(),
+            )
+        except Exception:
+            logger.exception("Admin menu database backup failed")
+            await message.reply_text(
+                "❌ تهیه بک‌آپ ناموفق بود.",
+                reply_markup=await admin_main_menu_keyboard(),
+            )
+        return ConversationHandler.END
+    if action == "🎁 مدیریت فایل‌های هدیه":
+        await message.reply_text(
+            "فایل هدیه را به‌صورت Document ارسال کنید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_GIFT_FILE
+    if action == "💬 وضعیت پشتیبانی":
+        from bot.handlers.admin import stats_command
+
+        await stats_command(update, context)
+        return ConversationHandler.END
+    if action == "💳 تنظیمات پرداخت":
+        await message.reply_text(
+            "شماره کارت را بفرستید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_PAYMENT_CARD
+    if action == "➕ افزودن کانال":
+        context.user_data.clear()
+        await message.reply_text(
+            "کانال اجباری را بفرستید (مثلاً @channel).",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_CHANNEL
+    if action == "➕ افزودن وبینار":
+        context.user_data.clear()
+        context.user_data["draft"] = {}
+        await message.reply_text(
+            "نام وبینار را بفرستید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_TITLE
+    if action == "📢 پیام همگانی":
+        context.user_data.clear()
+        context.user_data["broadcast"] = {"audience": "all"}
+        await message.reply_text(
+            "متن پیام همگانی را بفرستید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return BROADCAST_TEXT
+    return ConversationHandler.END
+
+
 async def start_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -210,6 +275,21 @@ async def start_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await query.answer()
     await query.message.reply_text(  # type: ignore[union-attr]
+        "متن یک تیکت آزمایشی را بفرستید تا پاسخ Groq را ببینید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_AI_TEST
+
+
+async def start_ai_test_from_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    if not _is_admin(update):
+        return ConversationHandler.END
+    message = update.effective_message
+    if message is None:
+        return ConversationHandler.END
+    await message.reply_text(
         "متن یک تیکت آزمایشی را بفرستید تا پاسخ Groq را ببینید.",
         reply_markup=wizard_keyboard(optional=False),
     )
@@ -257,6 +337,22 @@ async def start_ai_knowledge_upload(
     await query.message.reply_text(  # type: ignore[union-attr]
         "فایل متنی دانش را به‌صورت Document بفرستید (TXT یا JSON، حداکثر ۱ مگابایت).\n"
         "با آپلود فایل جدید، فایل قبلی جایگزین می‌شود. برای انصراف «انصراف» را بزنید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_AI_KNOWLEDGE
+
+
+async def start_ai_knowledge_from_menu(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    if not _is_admin(update):
+        return ConversationHandler.END
+    message = update.effective_message
+    if message is None:
+        return ConversationHandler.END
+    await message.reply_text(
+        "فایل TXT یا JSON دانش را ارسال کنید (حداکثر ۱ مگابایت).\n"
+        "برای انصراف «انصراف» را بزنید.",
         reply_markup=wizard_keyboard(optional=False),
     )
     return ASK_AI_KNOWLEDGE
@@ -1592,6 +1688,23 @@ def build_conversation() -> ConversationHandler:
     )
     return ConversationHandler(
         entry_points=[
+            MessageHandler(
+                filters.Regex(
+                    r"^(💬 وضعیت پشتیبانی|🎁 مدیریت فایل‌های هدیه|📢 پیام همگانی|"
+                    r"🤖 تست پاسخ AI|📚 فایل دانش AI|💾 بک‌آپ دیتابیس|💳 تنظیمات پرداخت|"
+                    r"➕ افزودن وبینار|➕ افزودن کانال)$"
+                )
+                & ~filters.COMMAND,
+                admin_menu_action,
+            ),
+            MessageHandler(
+                filters.Regex(r"^🤖 تست پاسخ AI$") & ~filters.COMMAND,
+                start_ai_test_from_menu,
+            ),
+            MessageHandler(
+                filters.Regex(r"^📚 فایل دانش AI$") & ~filters.COMMAND,
+                start_ai_knowledge_from_menu,
+            ),
             CallbackQueryHandler(start_create, pattern=r"^admin:webinar:new$"),
             CallbackQueryHandler(start_channel_create, pattern=r"^admin:channel:new$"),
             CallbackQueryHandler(start_payment_edit, pattern=r"^admin:payment:edit$"),
