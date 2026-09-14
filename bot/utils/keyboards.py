@@ -66,7 +66,7 @@ def wizard_keyboard(*, optional: bool) -> ReplyKeyboardMarkup:
     if optional:
         rows.append([KeyboardButton(BTN_SKIP)])
     rows.append([KeyboardButton(BTN_CANCEL)])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=False)
 
 
 async def admin_panel_keyboard() -> InlineKeyboardMarkup:

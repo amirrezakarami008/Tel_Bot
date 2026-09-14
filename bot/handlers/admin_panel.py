@@ -220,16 +220,25 @@ async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if message is None or update.effective_user is None or not _is_admin(update):
         return ConversationHandler.END
     if not message.text:
-        await message.reply_text("لطفاً متن تیکت را به‌صورت متنی بفرستید.")
+        await message.reply_text(
+            "لطفاً متن تیکت را به‌صورت متنی بفرستید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
         return ASK_AI_TEST
 
     try:
         reply = await generate_support_reply(message.text.strip())
     except (AIConfigurationError, AIRequestError) as exc:
-        await message.reply_text(f"تست Groq انجام نشد: {exc}")
+        await message.reply_text(
+            f"تست Groq انجام نشد: {exc}",
+            reply_markup=wizard_keyboard(optional=False),
+        )
     else:
-        await message.reply_text(f"🤖 پاسخ Groq:\n\n{reply}")
-    return ConversationHandler.END
+        await message.reply_text(
+            f"🤖 پاسخ Groq:\n\n{reply}",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+    return ASK_AI_TEST
 
 
 async def _edit_panel(query) -> None:
