@@ -29,6 +29,14 @@ cp .env.example .env
 | `LOG_LEVEL` | مثلاً `INFO` یا `DEBUG` |
 | `GIFT_MAX_FILE_SIZE_MB` | سقف فایل هدیه؛ پیش‌فرض `100` |
 | `TELEGRAM_API_BASE_URL` / `TELEGRAM_API_FILE_BASE_URL` | آدرس Local Bot API برای فایل‌های بزرگ |
+| `GEMINI_API_KEY` | کلید Google Gemini؛ فقط از `.env` خوانده می‌شود |
+| `GEMINI_MODEL` | مدل Gemini؛ پیش‌فرض `gemini-flash-latest` |
+
+### پاسخ‌گویی آزمایشی AI
+
+در پنل ادمین گزینه «🤖 تست پاسخ AI» اضافه شده و فقط ادمین‌ها آن را می‌بینند. همچنین
+پس از ثبت هر پیام پشتیبانی، پاسخ Gemini برای کاربر ارسال و در تاریخچه پشتیبانی ذخیره
+می‌شود.
 
 ### فرمت `REQUIRED_CHANNELS`
 

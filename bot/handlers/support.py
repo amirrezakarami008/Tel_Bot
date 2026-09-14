@@ -31,6 +31,7 @@ from bot.utils.buttons import (
     LEGACY_WEBINAR_BTN,
 )
 from bot.utils.features import FEATURE_SUPPORT, is_feature_enabled
+from bot.utils.ai import AIConfigurationError, AIRequestError, generate_support_reply
 from bot.utils.keyboards import main_menu_keyboard
 from bot.utils.users import get_or_create_user
 
@@ -254,6 +255,22 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
         ticket=ticket,
         header=header,
     )
+    try:
+        ai_reply = await generate_support_reply(preview)
+    except (AIConfigurationError, AIRequestError) as exc:
+        logger.info("Gemini support reply skipped: %s", exc)
+    else:
+        await context.bot.send_message(chat_id=user.id, text=ai_reply)
+        async with get_session() as session:
+            db_user = await get_or_create_user(session, user)
+            session.add(
+                SupportMessage(
+                    user_id=db_user.id,
+                    direction=SupportDirection.ADMIN_TO_USER.value,
+                    text=ai_reply,
+                    admin_telegram_id=None,
+                )
+            )
     await message.reply_text(
         "پیام شما برای پشتیبانی ارسال شد، پاسخ همین‌جا به شما داده خواهد شد.",
         reply_markup=await main_menu_keyboard(user.id),

@@ -58,6 +58,7 @@ from bot.utils.registrations import (
     registration_summary,
 )
 from bot.utils.backup import BackupError, send_database_backup
+from bot.utils.ai import AIConfigurationError, AIRequestError, generate_support_reply
 from bot.utils.users import list_all_telegram_ids
 from bot.utils.webinars import (
     DETAILS_MAX,
@@ -91,7 +92,8 @@ logger = logging.getLogger(__name__)
     BROADCAST_PICK,
     BROADCAST_TEXT,
     BROADCAST_CONFIRM,
-) = range(16)
+    ASK_AI_TEST,
+) = range(17)
 
 PANEL_TEXT = (
     "⚙️ مدیریت منو\n\n"
@@ -104,7 +106,7 @@ PANEL_TEXT = (
 )
 
 ADMIN_CALLBACK_PATTERN = (
-    r"^admin:(panel|payment|gifts|backup|toggle:|channel:(view|delete|delete_yes):|"
+    r"^admin:(panel|payment|ai_test|gifts|backup|toggle:|channel:(view|delete|delete_yes):|"
     r"webinar:(view|toggle|cert|regs|pending|reg|send|send_yes|delete|delete_yes):)"
 )
 
@@ -194,6 +196,40 @@ async def open_manage_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await message.reply_text("شما دسترسی ادمین ندارید.")
         return
     await _show_panel_message(message, user_id=user.id)
+
+
+async def start_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "متن یک تیکت آزمایشی را بفرستید تا پاسخ Gemini را ببینید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_AI_TEST
+
+
+async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    del context
+    message = update.effective_message
+    if message is None or update.effective_user is None or not _is_admin(update):
+        return ConversationHandler.END
+    if not message.text:
+        await message.reply_text("لطفاً متن تیکت را به‌صورت متنی بفرستید.")
+        return ASK_AI_TEST
+
+    try:
+        reply = await generate_support_reply(message.text.strip())
+    except (AIConfigurationError, AIRequestError) as exc:
+        await message.reply_text(f"تست Gemini انجام نشد: {exc}")
+    else:
+        await message.reply_text(f"🤖 پاسخ Gemini:\n\n{reply}")
+    return ConversationHandler.END
 
 
 async def _edit_panel(query) -> None:
@@ -1476,6 +1512,7 @@ def build_conversation() -> ConversationHandler:
             CallbackQueryHandler(start_payment_edit, pattern=r"^admin:payment:edit$"),
             CallbackQueryHandler(start_gift_upload, pattern=r"^admin:gifts:upload$"),
             CallbackQueryHandler(start_broadcast, pattern=r"^admin:broadcast$"),
+            CallbackQueryHandler(start_ai_test, pattern=r"^admin:ai_test$"),
             CallbackQueryHandler(
                 start_edit,
                 pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|group|price)$",
@@ -1520,6 +1557,9 @@ def build_conversation() -> ConversationHandler:
                 ),
                 CallbackQueryHandler(broadcast_confirm_callback, pattern=r"^admin:panel$"),
                 CallbackQueryHandler(broadcast_confirm_callback, pattern=r"^admin:broadcast$"),
+            ],
+            ASK_AI_TEST: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ai_test),
             ],
         },
         fallbacks=[
