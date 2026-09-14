@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from bot.config import get_settings
@@ -15,15 +17,45 @@ class AIRequestError(RuntimeError):
     pass
 
 
+async def _request_gemini(
+    client: httpx.AsyncClient,
+    *,
+    model: str,
+    payload: dict,
+    headers: dict[str, str],
+) -> dict:
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+    last_status: int | None = None
+    for attempt in range(3):
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            last_status = response.status_code
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                await asyncio.sleep(2**attempt)
+                continue
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            if attempt < 2 and (
+                isinstance(exc, httpx.TimeoutException)
+                or last_status in {429, 500, 502, 503, 504}
+            ):
+                await asyncio.sleep(2**attempt)
+                continue
+            raise AIRequestError(
+                f"دریافت پاسخ از Gemini ناموفق بود (HTTP {last_status or 'network'})."
+            ) from exc
+    raise AIRequestError("دریافت پاسخ از Gemini ناموفق بود.")
+
+
 async def generate_support_reply(user_text: str) -> str:
     settings = get_settings()
     if not settings.gemini_api_key:
         raise AIConfigurationError("GEMINI_API_KEY تنظیم نشده است.")
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
-    )
     payload = {
         "contents": [
             {
@@ -43,13 +75,13 @@ async def generate_support_reply(user_text: str) -> str:
         "Content-Type": "application/json",
         "X-goog-api-key": settings.gemini_api_key,
     }
-    try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise AIRequestError("دریافت پاسخ از Gemini ناموفق بود.") from exc
+    async with httpx.AsyncClient(timeout=45) as client:
+        data = await _request_gemini(
+            client,
+            model=settings.gemini_model,
+            payload=payload,
+            headers=headers,
+        )
 
     try:
         parts = data["candidates"][0]["content"]["parts"]

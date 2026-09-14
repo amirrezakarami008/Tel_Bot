@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     )
     gift_max_file_size_mb: int = Field(default=100, gt=0, alias="GIFT_MAX_FILE_SIZE_MB")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-flash-latest", alias="GEMINI_MODEL")
+    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
 
     @field_validator("bot_token", "database_url", "admin_telegram_ids")
     @classmethod

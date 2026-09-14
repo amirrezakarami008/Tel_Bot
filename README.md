@@ -30,7 +30,7 @@ cp .env.example .env
 | `GIFT_MAX_FILE_SIZE_MB` | سقف فایل هدیه؛ پیش‌فرض `100` |
 | `TELEGRAM_API_BASE_URL` / `TELEGRAM_API_FILE_BASE_URL` | آدرس Local Bot API برای فایل‌های بزرگ |
 | `GEMINI_API_KEY` | کلید Google Gemini؛ فقط از `.env` خوانده می‌شود |
-| `GEMINI_MODEL` | مدل Gemini؛ پیش‌فرض `gemini-flash-latest` |
+| `GEMINI_MODEL` | مدل Gemini؛ پیش‌فرض `gemini-2.5-flash` |
 
 ### پاسخ‌گویی آزمایشی AI
 
