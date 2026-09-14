@@ -21,6 +21,7 @@ from telegram.ext import (
 from bot.config import get_settings
 from bot.database.models import RegistrationStatus
 from bot.utils.buttons import BTN_CANCEL, BTN_MANAGE, BTN_SKIP
+from bot.utils.buttons import BTN_BACK, BTN_CANCEL, BTN_MANAGE, BTN_SKIP
 from bot.utils.channels import (
     channel_label,
     create_required_channel,
@@ -204,6 +205,12 @@ async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return ConversationHandler.END
 
     action = message.text.strip()
+    if action == BTN_BACK:
+        await message.reply_text(
+            "به منوی اصلی برگشتید.",
+            reply_markup=await main_menu_keyboard(user.id),
+        )
+        return ConversationHandler.END
     if action == "🤖 تست پاسخ AI":
         return await start_ai_test_from_menu(update, context)
     if action == "📚 فایل دانش AI":
@@ -297,10 +304,13 @@ async def start_ai_test_from_menu(
 
 
 async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    del context
     message = update.effective_message
     if message is None or update.effective_user is None or not _is_admin(update):
         return ConversationHandler.END
+    if message.text:
+        left = await _maybe_leave_wizard(update, context)
+        if left is not None:
+            return left
     if not message.text:
         await message.reply_text(
             "لطفاً متن تیکت را به‌صورت متنی بفرستید.",
@@ -984,7 +994,7 @@ async def _maybe_leave_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE
     if message is None or message.text is None:
         return None
     text = message.text.strip()
-    if _is_cancel(text):
+    if _is_cancel(text) or text == BTN_BACK:
         return await _cancel_conversation(update, context)
     if text == BTN_MANAGE:
         context.user_data.clear()
@@ -998,9 +1008,14 @@ async def _cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     message = update.effective_message
     if message is not None and user is not None:
+        keyboard = (
+            await admin_main_menu_keyboard()
+            if get_settings().is_admin(user.id)
+            else await main_menu_keyboard(user.id)
+        )
         await message.reply_text(
             "انصراف داده شد.",
-            reply_markup=await main_menu_keyboard(user.id),
+            reply_markup=keyboard,
         )
     return ConversationHandler.END
 
@@ -1691,7 +1706,7 @@ def build_conversation() -> ConversationHandler:
             MessageHandler(
                 filters.Regex(
                     r"^(💬 وضعیت پشتیبانی|🎁 مدیریت فایل‌های هدیه|📢 پیام همگانی|"
-                    r"🤖 تست پاسخ AI|📚 فایل دانش AI|💾 بک‌آپ دیتابیس|💳 تنظیمات پرداخت|"
+                    r"🤖 تست پاسخ AI|📚 فایل دانش AI|💾 بک‌آپ دیتابیس|💳 تنظیمات پرداخت|↩️ بازگشت|"
                     r"➕ افزودن وبینار|➕ افزودن کانال)$"
                 )
                 & ~filters.COMMAND,

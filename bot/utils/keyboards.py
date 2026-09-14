@@ -6,6 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 
 from bot.config import get_settings
 from bot.utils.buttons import BTN_GIFT, BTN_MANAGE, BTN_STATS, BTN_SUPPORT
+from bot.utils.buttons import BTN_BACK, BTN_GIFT, BTN_MANAGE, BTN_STATS, BTN_SUPPORT
 from bot.utils.channels import channel_label, channel_to_dict, list_required_channels
 from bot.utils.features import FEATURE_GIFT, FEATURE_SUPPORT, is_feature_enabled
 from bot.utils.webinars import list_visible_webinars, webinar_button_text
@@ -77,18 +78,19 @@ async def admin_main_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("📚 فایل دانش AI"), KeyboardButton("💾 بک‌آپ دیتابیس")],
         [KeyboardButton("💳 تنظیمات پرداخت")],
         [KeyboardButton("➕ افزودن وبینار"), KeyboardButton("➕ افزودن کانال")],
+        [KeyboardButton(BTN_BACK)],
         [KeyboardButton(BTN_MANAGE)],
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
 def wizard_keyboard(*, optional: bool) -> ReplyKeyboardMarkup:
-    from bot.utils.buttons import BTN_CANCEL, BTN_SKIP
+    from bot.utils.buttons import BTN_BACK, BTN_CANCEL, BTN_SKIP
 
     rows: list[list[KeyboardButton]] = []
     if optional:
         rows.append([KeyboardButton(BTN_SKIP)])
-    rows.append([KeyboardButton(BTN_CANCEL)])
+    rows.append([KeyboardButton(BTN_BACK), KeyboardButton(BTN_CANCEL)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=False)
 
 
