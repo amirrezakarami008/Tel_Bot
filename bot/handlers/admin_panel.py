@@ -59,6 +59,7 @@ from bot.utils.registrations import (
 )
 from bot.utils.backup import BackupError, send_database_backup
 from bot.utils.ai import AIConfigurationError, AIRequestError, generate_support_reply
+from bot.utils.knowledge import save_knowledge_document
 from bot.utils.users import list_all_telegram_ids
 from bot.utils.webinars import (
     DETAILS_MAX,
@@ -93,7 +94,8 @@ logger = logging.getLogger(__name__)
     BROADCAST_TEXT,
     BROADCAST_CONFIRM,
     ASK_AI_TEST,
-) = range(17)
+    ASK_AI_KNOWLEDGE,
+) = range(18)
 
 PANEL_TEXT = (
     "⚙️ مدیریت منو\n\n"
@@ -106,7 +108,7 @@ PANEL_TEXT = (
 )
 
 ADMIN_CALLBACK_PATTERN = (
-    r"^admin:(panel|payment|ai_test|gifts|backup|toggle:|channel:(view|delete|delete_yes):|"
+    r"^admin:(panel|payment|ai_test|ai_knowledge|gifts|backup|toggle:|channel:(view|delete|delete_yes):|"
     r"webinar:(view|toggle|cert|regs|pending|reg|send|send_yes|delete|delete_yes):)"
 )
 
@@ -239,6 +241,80 @@ async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=wizard_keyboard(optional=False),
         )
     return ASK_AI_TEST
+
+
+async def start_ai_knowledge_upload(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+    if not _is_admin(update):
+        await query.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return ConversationHandler.END
+
+    await query.answer()
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "فایل متنی دانش را به‌صورت Document بفرستید (TXT یا JSON، حداکثر ۱ مگابایت).\n"
+        "با آپلود فایل جدید، فایل قبلی جایگزین می‌شود. برای انصراف «انصراف» را بزنید.",
+        reply_markup=wizard_keyboard(optional=False),
+    )
+    return ASK_AI_KNOWLEDGE
+
+
+async def receive_ai_knowledge_upload(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    message = update.effective_message
+    if message is None:
+        return ASK_AI_KNOWLEDGE
+    if message.text:
+        left = await _maybe_leave_wizard(update, context)
+        if left is not None:
+            return left
+        await message.reply_text(
+            "لطفاً فایل TXT یا JSON را به‌صورت Document ارسال کنید.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_AI_KNOWLEDGE
+
+    document = message.document
+    if document is None:
+        await message.reply_text(
+            "فقط فایل TXT یا JSON پشتیبانی می‌شود.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_AI_KNOWLEDGE
+
+    filename = (document.file_name or "").lower()
+    if not filename.endswith((".txt", ".json")):
+        await message.reply_text(
+            "فرمت فایل باید TXT یا JSON باشد.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_AI_KNOWLEDGE
+    if document.file_size is not None and document.file_size > 1_000_000:
+        await message.reply_text(
+            "حجم فایل دانش نباید بیشتر از ۱ مگابایت باشد.",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_AI_KNOWLEDGE
+
+    try:
+        saved = await save_knowledge_document(context.bot, file_id=document.file_id)
+    except Exception as exc:
+        logger.exception("AI knowledge upload failed")
+        await message.reply_text(
+            f"آپلود فایل دانش ناموفق بود.\n{exc}",
+            reply_markup=wizard_keyboard(optional=False),
+        )
+        return ASK_AI_KNOWLEDGE
+
+    await message.reply_text(
+        f"فایل دانش «{saved.name}» ذخیره شد و از این پس در پاسخ‌های AI استفاده می‌شود.",
+        reply_markup=await main_menu_keyboard(update.effective_user.id),
+    )
+    return ConversationHandler.END
 
 
 async def _edit_panel(query) -> None:
@@ -1523,6 +1599,10 @@ def build_conversation() -> ConversationHandler:
             CallbackQueryHandler(start_broadcast, pattern=r"^admin:broadcast$"),
             CallbackQueryHandler(start_ai_test, pattern=r"^admin:ai_test$"),
             CallbackQueryHandler(
+                start_ai_knowledge_upload,
+                pattern=r"^admin:ai_knowledge$",
+            ),
+            CallbackQueryHandler(
                 start_edit,
                 pattern=r"^admin:webinar:edit:\d+:(title|time|details|link|group|price)$",
             ),
@@ -1569,6 +1649,10 @@ def build_conversation() -> ConversationHandler:
             ],
             ASK_AI_TEST: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ai_test),
+            ],
+            ASK_AI_KNOWLEDGE: [
+                MessageHandler(filters.Document.ALL & ~filters.COMMAND, receive_ai_knowledge_upload),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ai_knowledge_upload),
             ],
         },
         fallbacks=[

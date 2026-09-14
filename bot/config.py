@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     gift_max_file_size_mb: int = Field(default=100, gt=0, alias="GIFT_MAX_FILE_SIZE_MB")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_model: str = Field(default="openai/gpt-oss-20b", alias="GROQ_MODEL")
+    ai_knowledge_file: Path = Field(
+        default=Path("./gift_files/ai_knowledge.txt"),
+        alias="AI_KNOWLEDGE_FILE",
+    )
 
     @field_validator("bot_token", "database_url", "admin_telegram_ids")
     @classmethod

@@ -256,7 +256,7 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
         header=header,
     )
     try:
-        ai_reply = await generate_support_reply(preview)
+        ai_reply = await generate_support_reply(preview, telegram_id=user.id)
     except (AIConfigurationError, AIRequestError) as exc:
         logger.info("Groq support reply skipped: %s", exc)
     else:

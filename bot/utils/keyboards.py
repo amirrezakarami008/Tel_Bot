@@ -93,6 +93,7 @@ async def admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🎁 مدیریت فایل‌های هدیه", callback_data="admin:gifts")],
         [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin:broadcast")],
         [InlineKeyboardButton("🤖 تست پاسخ AI", callback_data="admin:ai_test")],
+        [InlineKeyboardButton("📚 آپلود فایل دانش AI", callback_data="admin:ai_knowledge")],
         [InlineKeyboardButton("💾 بک‌آپ دیتابیس", callback_data="admin:backup")],
         [InlineKeyboardButton("➕ افزودن کانال اجباری", callback_data="admin:channel:new")],
     ]
