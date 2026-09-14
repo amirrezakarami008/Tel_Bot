@@ -41,8 +41,8 @@ class Settings(BaseSettings):
         alias="TELEGRAM_API_FILE_BASE_URL",
     )
     gift_max_file_size_mb: int = Field(default=100, gt=0, alias="GIFT_MAX_FILE_SIZE_MB")
-    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_model: str = Field(default="openai/gpt-oss-20b", alias="GROQ_MODEL")
 
     @field_validator("bot_token", "database_url", "admin_telegram_ids")
     @classmethod
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         "telegram_proxy",
         "telegram_api_base_url",
         "telegram_api_file_base_url",
-        "gemini_api_key",
+        "groq_api_key",
         mode="before",
     )
     @classmethod

@@ -208,7 +208,7 @@ async def start_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await query.answer()
     await query.message.reply_text(  # type: ignore[union-attr]
-        "متن یک تیکت آزمایشی را بفرستید تا پاسخ Gemini را ببینید.",
+        "متن یک تیکت آزمایشی را بفرستید تا پاسخ Groq را ببینید.",
         reply_markup=wizard_keyboard(optional=False),
     )
     return ASK_AI_TEST
@@ -226,9 +226,9 @@ async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         reply = await generate_support_reply(message.text.strip())
     except (AIConfigurationError, AIRequestError) as exc:
-        await message.reply_text(f"تست Gemini انجام نشد: {exc}")
+        await message.reply_text(f"تست Groq انجام نشد: {exc}")
     else:
-        await message.reply_text(f"🤖 پاسخ Gemini:\n\n{reply}")
+        await message.reply_text(f"🤖 پاسخ Groq:\n\n{reply}")
     return ConversationHandler.END
 
 

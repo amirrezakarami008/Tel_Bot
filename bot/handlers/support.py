@@ -258,7 +258,7 @@ async def handle_user_support(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         ai_reply = await generate_support_reply(preview)
     except (AIConfigurationError, AIRequestError) as exc:
-        logger.info("Gemini support reply skipped: %s", exc)
+        logger.info("Groq support reply skipped: %s", exc)
     else:
         await context.bot.send_message(chat_id=user.id, text=ai_reply)
         async with get_session() as session:

@@ -1,4 +1,4 @@
-"""Google Gemini client for support replies."""
+"""Groq Responses API client for support replies."""
 
 from __future__ import annotations
 
@@ -17,17 +17,13 @@ class AIRequestError(RuntimeError):
     pass
 
 
-async def _request_gemini(
+async def _request_groq(
     client: httpx.AsyncClient,
     *,
-    model: str,
     payload: dict,
     headers: dict[str, str],
 ) -> dict:
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
-    )
+    url = "https://api.groq.com/openai/v1/responses"
     last_status: int | None = None
     for attempt in range(3):
         try:
@@ -46,48 +42,47 @@ async def _request_gemini(
                 await asyncio.sleep(2**attempt)
                 continue
             raise AIRequestError(
-                f"دریافت پاسخ از Gemini ناموفق بود (HTTP {last_status or 'network'})."
+                f"دریافت پاسخ از Groq ناموفق بود (HTTP {last_status or 'network'})."
             ) from exc
-    raise AIRequestError("دریافت پاسخ از Gemini ناموفق بود.")
+    raise AIRequestError("دریافت پاسخ از Groq ناموفق بود.")
 
 
 async def generate_support_reply(user_text: str) -> str:
     settings = get_settings()
-    if not settings.gemini_api_key:
-        raise AIConfigurationError("GEMINI_API_KEY تنظیم نشده است.")
+    if not settings.groq_api_key:
+        raise AIConfigurationError("GROQ_API_KEY تنظیم نشده است.")
 
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": (
-                            "تو دستیار پشتیبانی فارسی هستی. کوتاه، دقیق و محترمانه پاسخ بده. "
-                            "اگر اطلاعات کافی نداری، کاربر را به پشتیبانی انسانی ارجاع بده.\n\n"
-                            f"پیام کاربر:\n{user_text}"
-                        )
-                    }
-                ]
-            }
-        ]
+        "model": settings.groq_model,
+        "input": (
+            "تو دستیار پشتیبانی فارسی هستی. کوتاه، دقیق و محترمانه پاسخ بده. "
+            "اگر اطلاعات کافی نداری، کاربر را به پشتیبانی انسانی ارجاع بده.\n\n"
+            f"پیام کاربر:\n{user_text}"
+        ),
     }
     headers = {
         "Content-Type": "application/json",
-        "X-goog-api-key": settings.gemini_api_key,
+        "Authorization": f"Bearer {settings.groq_api_key}",
     }
     async with httpx.AsyncClient(timeout=45) as client:
-        data = await _request_gemini(
+        data = await _request_groq(
             client,
-            model=settings.gemini_model,
             payload=payload,
             headers=headers,
         )
 
     try:
-        parts = data["candidates"][0]["content"]["parts"]
-        content = "".join(part["text"] for part in parts if part.get("text"))
+        content = data["output_text"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise AIRequestError("فرمت پاسخ Gemini قابل شناسایی نیست.") from exc
-    if not content.strip():
-        raise AIRequestError("Gemini پاسخ خالی برگرداند.")
+        try:
+            content = "".join(
+                item["text"]
+                for output in data["output"]
+                for item in output.get("content", [])
+                if item.get("type") == "output_text"
+            )
+        except (KeyError, TypeError) as nested_exc:
+            raise AIRequestError("فرمت پاسخ Groq قابل شناسایی نیست.") from nested_exc
+    if not isinstance(content, str) or not content.strip():
+        raise AIRequestError("Groq پاسخ خالی برگرداند.")
     return content.strip()
