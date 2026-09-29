@@ -84,13 +84,21 @@ async def admin_main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
-def wizard_keyboard(*, optional: bool) -> ReplyKeyboardMarkup:
-    from bot.utils.buttons import BTN_BACK, BTN_CANCEL, BTN_SKIP
+async def wizard_keyboard(*, optional: bool) -> ReplyKeyboardMarkup:
+    """Keep the admin menu visible during input wizards.
+
+    Previously this replaced the menu with only «انصراف / بازگشت», which stuck
+    after AI/admin flows. Cancel still works by typing «انصراف».
+    """
+    from bot.utils.buttons import BTN_BACK, BTN_SKIP
 
     rows: list[list[KeyboardButton]] = []
+    for row in (await admin_main_menu_keyboard()).keyboard:
+        filtered = [button for button in row if button.text != BTN_BACK]
+        if filtered:
+            rows.append(filtered)
     if optional:
-        rows.append([KeyboardButton(BTN_SKIP)])
-    rows.append([KeyboardButton(BTN_BACK), KeyboardButton(BTN_CANCEL)])
+        rows.insert(0, [KeyboardButton(BTN_SKIP)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=False)
 
 

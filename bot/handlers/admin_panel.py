@@ -230,11 +230,14 @@ async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
         return ConversationHandler.END
     if action == "🎁 مدیریت فایل‌های هدیه":
+        files = list_gift_files()
         await message.reply_text(
-            "فایل هدیه را به‌صورت Document ارسال کنید.",
-            reply_markup=wizard_keyboard(optional=False),
+            "🎁 مدیریت فایل‌های هدیه\n\n"
+            f"تعداد فایل‌ها: {len(files)}\n"
+            "می‌توانید فایل جدید آپلود کنید یا فایل موجود را حذف کنید.",
+            reply_markup=gift_files_keyboard(),
         )
-        return ASK_GIFT_FILE
+        return ConversationHandler.END
     if action == "💬 وضعیت پشتیبانی":
         from bot.handlers.admin import stats_command
 
@@ -243,14 +246,14 @@ async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if action == "💳 تنظیمات پرداخت":
         await message.reply_text(
             "شماره کارت را بفرستید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_PAYMENT_CARD
     if action == "➕ افزودن کانال":
         context.user_data.clear()
         await message.reply_text(
             "کانال اجباری را بفرستید (مثلاً @channel).",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_CHANNEL
     if action == "➕ افزودن وبینار":
@@ -258,7 +261,7 @@ async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["draft"] = {}
         await message.reply_text(
             "نام وبینار را بفرستید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_TITLE
     if action == "📢 پیام همگانی":
@@ -266,7 +269,7 @@ async def admin_menu_action(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["broadcast"] = {"audience": "all"}
         await message.reply_text(
             "متن پیام همگانی را بفرستید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return BROADCAST_TEXT
     return ConversationHandler.END
@@ -283,7 +286,7 @@ async def start_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await query.answer()
     await query.message.reply_text(  # type: ignore[union-attr]
         "متن یک تیکت آزمایشی را بفرستید تا پاسخ Groq را ببینید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_AI_TEST
 
@@ -298,7 +301,7 @@ async def start_ai_test_from_menu(
         return ConversationHandler.END
     await message.reply_text(
         "متن یک تیکت آزمایشی را بفرستید تا پاسخ Groq را ببینید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_AI_TEST
 
@@ -314,7 +317,7 @@ async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not message.text:
         await message.reply_text(
             "لطفاً متن تیکت را به‌صورت متنی بفرستید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_TEST
 
@@ -323,12 +326,12 @@ async def receive_ai_test(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except (AIConfigurationError, AIRequestError) as exc:
         await message.reply_text(
             f"تست Groq انجام نشد: {exc}",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
     else:
         await message.reply_text(
             f"🤖 پاسخ Groq:\n\n{reply}",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
     return ASK_AI_TEST
 
@@ -347,7 +350,7 @@ async def start_ai_knowledge_upload(
     await query.message.reply_text(  # type: ignore[union-attr]
         "فایل متنی دانش را به‌صورت Document بفرستید (TXT یا JSON، حداکثر ۱ مگابایت).\n"
         "با آپلود فایل جدید، فایل قبلی جایگزین می‌شود. برای انصراف «انصراف» را بزنید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_AI_KNOWLEDGE
 
@@ -363,7 +366,7 @@ async def start_ai_knowledge_from_menu(
     await message.reply_text(
         "فایل TXT یا JSON دانش را ارسال کنید (حداکثر ۱ مگابایت).\n"
         "برای انصراف «انصراف» را بزنید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_AI_KNOWLEDGE
 
@@ -380,7 +383,7 @@ async def receive_ai_knowledge_upload(
             return left
         await message.reply_text(
             "لطفاً فایل TXT یا JSON را به‌صورت Document ارسال کنید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_KNOWLEDGE
 
@@ -388,7 +391,7 @@ async def receive_ai_knowledge_upload(
     if document is None:
         await message.reply_text(
             "فقط فایل TXT یا JSON پشتیبانی می‌شود.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_KNOWLEDGE
 
@@ -396,13 +399,13 @@ async def receive_ai_knowledge_upload(
     if not filename.endswith((".txt", ".json")):
         await message.reply_text(
             "فرمت فایل باید TXT یا JSON باشد.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_KNOWLEDGE
     if document.file_size is not None and document.file_size > 1_000_000:
         await message.reply_text(
             "حجم فایل دانش نباید بیشتر از ۱ مگابایت باشد.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_KNOWLEDGE
 
@@ -412,7 +415,7 @@ async def receive_ai_knowledge_upload(
         logger.exception("AI knowledge upload failed")
         await message.reply_text(
             f"آپلود فایل دانش ناموفق بود.\n{exc}",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_AI_KNOWLEDGE
 
@@ -834,7 +837,7 @@ async def start_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["draft"] = {}
     await query.message.reply_text(  # type: ignore[union-attr]
         "نام وبینار را بفرستید.\nهمین نام روی دکمه منو نمایش داده می‌شود.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_TITLE
 
@@ -858,7 +861,7 @@ async def start_channel_create(update: Update, context: ContextTypes.DEFAULT_TYP
         "• -1001234567890:@mychannel\n"
         "• -1001234567890\n\n"
         "قبل از افزودن، ربات را در آن کانال ادمین کنید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_CHANNEL
 
@@ -930,7 +933,7 @@ async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parsed = parse_channel_input(message.text)
         resolved = await _resolve_channel_with_bot(context.bot, parsed)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=False))
         return ASK_CHANNEL
 
     context.user_data["channel_draft"] = resolved
@@ -940,7 +943,7 @@ async def receive_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await message.reply_text(
         "لینک عضویت این کانال را بفرستید (مثلاً لینک دعوت خصوصی).\n"
         "بدون لینک، دکمه عضویت برای کاربر ساخته نمی‌شود.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_CHANNEL_INVITE
 
@@ -955,7 +958,7 @@ async def receive_channel_invite(update: Update, context: ContextTypes.DEFAULT_T
     try:
         invite = normalize_invite_link(message.text)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=False))
         return ASK_CHANNEL_INVITE
     draft = context.user_data.setdefault("channel_draft", {})
     draft["invite_link"] = invite
@@ -984,7 +987,7 @@ async def start_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     optional = field != "title"
     await query.message.reply_text(  # type: ignore[union-attr]
         EDIT_PROMPTS[field],
-        reply_markup=wizard_keyboard(optional=optional),
+        reply_markup=await wizard_keyboard(optional=optional),
     )
     return EDIT_VALUE
 
@@ -1000,6 +1003,32 @@ async def _maybe_leave_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.clear()
         await open_manage_panel(update, context)
         return ConversationHandler.END
+
+    # Leave wizard if user navigates to a main-menu section so cancel/back
+    # keyboard state cannot swallow gift/support/webinar/stats actions.
+    from bot.utils.buttons import BTN_GIFT, BTN_STATS, BTN_SUPPORT
+    from bot.utils.webinars import list_visible_webinars, webinar_button_text
+
+    if text in {BTN_GIFT, BTN_SUPPORT, BTN_STATS}:
+        context.user_data.clear()
+        if text == BTN_STATS:
+            from bot.handlers.admin import stats_command
+
+            await stats_command(update, context)
+        else:
+            from bot.handlers.start import menu_text_handler
+
+            await menu_text_handler(update, context)
+        return ConversationHandler.END
+
+    for webinar in await list_visible_webinars():
+        if text == webinar_button_text(webinar):
+            context.user_data.clear()
+            from bot.handlers.webinar import webinar_button_handler
+
+            await webinar_button_handler(update, context)
+            return ConversationHandler.END
+
     return None
 
 
@@ -1048,12 +1077,12 @@ async def receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     try:
         title = normalize_title(message.text)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=False))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=False))
         return ASK_TITLE
     context.user_data.setdefault("draft", {})["title"] = title
     await message.reply_text(
         "ساعت برگزاری را بفرستید (مثلاً 21:00).\nاگر لازم نیست «رد شدن» را بزنید.",
-        reply_markup=wizard_keyboard(optional=True),
+        reply_markup=await wizard_keyboard(optional=True),
     )
     return ASK_TIME
 
@@ -1068,12 +1097,12 @@ async def receive_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     try:
         time_text = None if _is_skip(message.text) else normalize_optional(message.text, max_len=64)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=True))
         return ASK_TIME
     context.user_data.setdefault("draft", {})["time_text"] = time_text
     await message.reply_text(
         "جزئیات را بفرستید (مثلاً نحوه ورود).\nاگر لازم نیست «رد شدن» را بزنید.",
-        reply_markup=wizard_keyboard(optional=True),
+        reply_markup=await wizard_keyboard(optional=True),
     )
     return ASK_DETAILS
 
@@ -1088,12 +1117,12 @@ async def receive_details(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         details = None if _is_skip(message.text) else normalize_optional(message.text, max_len=DETAILS_MAX)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=True))
         return ASK_DETAILS
     context.user_data.setdefault("draft", {})["details"] = details
     await message.reply_text(
         "لینک ورود را بفرستید (با https://).\nاگر هنوز آماده نیست «رد شدن» را بزنید؛ بعداً می‌توانید اضافه کنید.",
-        reply_markup=wizard_keyboard(optional=True),
+        reply_markup=await wizard_keyboard(optional=True),
     )
     return ASK_LINK
 
@@ -1109,7 +1138,7 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     try:
         link = None if _is_skip(message.text) else normalize_link(message.text)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=True))
         return ASK_LINK
 
     context.user_data.setdefault("draft", {})["link"] = link
@@ -1117,7 +1146,7 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "لینک گروه وبینار را بفرستید (با https://).\n"
         "این لینک در آخرین مرحله ثبت‌نام (با مدرک یا بدون مدرک) به کاربر داده می‌شود.\n"
         "اگر هنوز آماده نیست «رد شدن» را بزنید.",
-        reply_markup=wizard_keyboard(optional=True),
+        reply_markup=await wizard_keyboard(optional=True),
     )
     return ASK_GROUP_LINK
 
@@ -1133,7 +1162,7 @@ async def receive_group_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         group_link = None if _is_skip(message.text) else normalize_link(message.text)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=True))
         return ASK_GROUP_LINK
 
     context.user_data.setdefault("draft", {})["group_link"] = group_link
@@ -1161,7 +1190,7 @@ async def receive_has_cert(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data.setdefault("draft", {})["has_certificate"] = True
         await message.reply_text(
             "مبلغ مدرک را بفرستید (مثلاً ۱۵۰٬۰۰۰ تومان).",
-            reply_markup=wizard_keyboard(optional=True),
+            reply_markup=await wizard_keyboard(optional=True),
         )
         return ASK_PRICE
     if text == BTN_CERT_NO:
@@ -1189,7 +1218,7 @@ async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     try:
         price = None if _is_skip(message.text) else normalize_optional(message.text, max_len=120)
     except ValueError as exc:
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=True))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=True))
         return ASK_PRICE
     context.user_data.setdefault("draft", {})["certificate_price"] = price
     return await _finish_webinar_create(update, context)
@@ -1218,7 +1247,7 @@ async def _finish_webinar_create(update: Update, context: ContextTypes.DEFAULT_T
     except ValueError as exc:
         await message.reply_text(
             f"{exc}\nنام دیگری بفرستید:",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_TITLE
 
@@ -1249,7 +1278,7 @@ async def start_payment_edit(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.clear()
     await query.message.reply_text(  # type: ignore[union-attr]
         "شماره کارت را بفرستید (فقط عدد، با یا بدون خط تیره).",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_PAYMENT_CARD
 
@@ -1266,7 +1295,7 @@ async def start_gift_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.message.reply_text(  # type: ignore[union-attr]
         "فایل هدیه را به‌صورت Document (مثلاً PDF) همین‌جا بفرستید.\n"
         "برای انصراف «انصراف» را بزنید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return ASK_GIFT_FILE
 
@@ -1283,7 +1312,7 @@ async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return left
         await message.reply_text(
             "لطفاً خود فایل را ارسال کنید (نه متن).",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_GIFT_FILE
 
@@ -1291,7 +1320,7 @@ async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if document is None:
         await message.reply_text(
             "فقط فایل Document پشتیبانی می‌شود (مثلاً PDF).",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_GIFT_FILE
 
@@ -1300,7 +1329,7 @@ async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await message.reply_text(
             f"حجم فایل بیشتر از حد مجاز است. حداکثر حجم: "
             f"{get_settings().gift_max_file_size_mb} مگابایت.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_GIFT_FILE
 
@@ -1315,7 +1344,7 @@ async def receive_gift_file(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.exception("Gift upload failed")
         await message.reply_text(
             f"آپلود ناموفق بود.\n{exc}",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_GIFT_FILE
 
@@ -1343,13 +1372,13 @@ async def receive_payment_card(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(re.sub(r"\D", "", number)) < 12:
         await message.reply_text(
             "شماره کارت معتبر به نظر نمی‌رسد. دوباره بفرستید.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return ASK_PAYMENT_CARD
     context.user_data["payment_card_number"] = number
     await message.reply_text(
         "نام صاحب کارت را بفرستید (یا «رد شدن»).",
-        reply_markup=wizard_keyboard(optional=True),
+        reply_markup=await wizard_keyboard(optional=True),
     )
     return ASK_PAYMENT_HOLDER
 
@@ -1412,7 +1441,7 @@ async def receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         webinar = await update_webinar(webinar_id, **{field: value})
     except ValueError as exc:
         optional = context.user_data.get("edit_field") != "title"
-        await message.reply_text(str(exc), reply_markup=wizard_keyboard(optional=optional))
+        await message.reply_text(str(exc), reply_markup=await wizard_keyboard(optional=optional))
         return EDIT_VALUE
 
     context.user_data.clear()
@@ -1487,7 +1516,7 @@ async def _prompt_broadcast_text(query, context: ContextTypes.DEFAULT_TYPE) -> i
         f"مخاطب: {label}\n\n"
         "متن پیام همگانی را بفرستید.\n"
         "برای انصراف «انصراف» را بزنید.",
-        reply_markup=wizard_keyboard(optional=False),
+        reply_markup=await wizard_keyboard(optional=False),
     )
     return BROADCAST_TEXT
 
@@ -1611,13 +1640,13 @@ async def receive_broadcast_text(update: Update, context: ContextTypes.DEFAULT_T
     if not text:
         await message.reply_text(
             "متن پیام نمی‌تواند خالی باشد.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return BROADCAST_TEXT
     if len(text) > BROADCAST_TEXT_MAX:
         await message.reply_text(
             f"متن پیام حداکثر {BROADCAST_TEXT_MAX} کاراکتر باشد.",
-            reply_markup=wizard_keyboard(optional=False),
+            reply_markup=await wizard_keyboard(optional=False),
         )
         return BROADCAST_TEXT
 

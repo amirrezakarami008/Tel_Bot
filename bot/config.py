@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_model: str = Field(default="openai/gpt-oss-20b", alias="GROQ_MODEL")
     ai_knowledge_file: Path = Field(
-        default=Path("./gift_files/ai_knowledge.txt"),
+        default=Path("./ai_data/ai_knowledge.txt"),
         alias="AI_KNOWLEDGE_FILE",
     )
 

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
 from pathlib import Path
 
 from bot.config import get_settings
 
+
+logger = logging.getLogger(__name__)
 
 MAX_KNOWLEDGE_BYTES = 1_000_000
 
@@ -13,7 +17,22 @@ MAX_KNOWLEDGE_BYTES = 1_000_000
 def knowledge_file_path() -> Path:
     path = Path(get_settings().ai_knowledge_file)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _maybe_migrate_legacy_knowledge(path)
     return path
+
+
+def _maybe_migrate_legacy_knowledge(target: Path) -> None:
+    """Move old gift_files/ai_knowledge.txt into the dedicated AI path once."""
+    if target.is_file():
+        return
+    legacy = Path("./gift_files/ai_knowledge.txt")
+    if not legacy.is_file():
+        return
+    try:
+        shutil.move(str(legacy), str(target))
+        logger.info("Migrated AI knowledge file from %s to %s", legacy, target)
+    except OSError:
+        logger.exception("Failed to migrate AI knowledge file from %s", legacy)
 
 
 def read_knowledge_text() -> str:

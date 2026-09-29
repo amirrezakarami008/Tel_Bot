@@ -31,7 +31,7 @@ cp .env.example .env
 | `TELEGRAM_API_BASE_URL` / `TELEGRAM_API_FILE_BASE_URL` | آدرس Local Bot API برای فایل‌های بزرگ |
 | `GROQ_API_KEY` | کلید Groq؛ فقط از `.env` خوانده می‌شود |
 | `GROQ_MODEL` | مدل Groq؛ پیش‌فرض `openai/gpt-oss-20b` |
-| `AI_KNOWLEDGE_FILE` | مسیر فایل TXT/JSON دانش AI؛ پیش‌فرض `./gift_files/ai_knowledge.txt` |
+| `AI_KNOWLEDGE_FILE` | مسیر فایل TXT/JSON دانش AI؛ پیش‌فرض `./ai_data/ai_knowledge.txt` |
 
 ### پاسخ‌گویی آزمایشی AI
 
@@ -156,6 +156,7 @@ bot/
   handlers/          # start, membership, webinar, gift, support, admin
   utils/             # keyboards و helpers
 gift_files/          # PDFهای هدیه
+ai_data/             # فایل دانش AI
 docker-compose.yml
 Dockerfile
 .env.example

@@ -24,11 +24,29 @@ def list_gift_files() -> list[Path]:
     if not directory.is_dir():
         logger.warning("Gift files directory missing: %s", directory)
         return []
-    return sorted(
-        path
-        for path in directory.iterdir()
-        if path.is_file() and not path.name.startswith(".")
-    )
+
+    excluded_names = {"ai_knowledge.txt"}
+    try:
+        knowledge = Path(get_settings().ai_knowledge_file)
+        excluded_names.add(knowledge.name)
+        knowledge_resolved = knowledge.resolve()
+    except Exception:
+        knowledge_resolved = None
+
+    files: list[Path] = []
+    for path in directory.iterdir():
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.name in excluded_names:
+            continue
+        if knowledge_resolved is not None:
+            try:
+                if path.resolve() == knowledge_resolved:
+                    continue
+            except OSError:
+                pass
+        files.append(path)
+    return sorted(files)
 
 
 def sanitize_filename(name: str) -> str:

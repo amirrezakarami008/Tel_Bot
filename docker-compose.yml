@@ -43,6 +43,7 @@ services:
       - .env
     volumes:
       - ./gift_files:/app/gift_files
+      - ./ai_data:/app/ai_data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
